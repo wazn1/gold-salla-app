@@ -155,3 +155,22 @@ const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });
+// مسار مؤقت لإدخال التوكن مباشرة
+app.get('/api/setup-token', async (req, res) => {
+    const { merchant_id, access_token, refresh_token } = req.query;
+    if (!merchant_id || !access_token) {
+        return res.status(400).send('يرجى تزويد merchant_id و access_token في الرابط');
+    }
+    try {
+        await db.query(`
+            INSERT INTO store_settings (merchant_id, access_token, refresh_token)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (merchant_id) DO UPDATE 
+            SET access_token = EXCLUDED.access_token, refresh_token = EXCLUDED.refresh_token
+        `, [merchant_id, access_token, refresh_token || 'dummy_refresh']);
+
+        res.send(' تم حفظ Access Token بنجاح في قاعدة البيانات!');
+    } catch (err) {
+        res.status(500).send('خطأ أثناء الحفظ: ' + err.message);
+    }
+});
