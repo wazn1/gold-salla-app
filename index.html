@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>إدارة تسعير الذهب - جوهرة وازن</title>
+    <style>
+        :root {
+            --primary: #c8102e;
+            --primary-dark: #990b21;
+            --bg: #f8f9fa;
+            --card-bg: #ffffff;
+            --text: #2c3e50;
+            --border: #e2e8f0;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--card-bg);
+            padding: 20px 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            margin-bottom: 25px;
+            border-right: 6px solid var(--primary);
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 22px;
+            color: var(--primary);
+        }
+
+        .btn {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+
+        .btn:hover {
+            background-color: var(--primary-dark);
+        }
+
+        .btn-sync {
+            background-color: #27ae60;
+        }
+        .btn-sync:hover {
+            background-color: #219150;
+        }
+
+        .products-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--card-bg);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        }
+
+        .products-table th, .products-table td {
+            padding: 14px 16px;
+            text-align: right;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .products-table th {
+            background-color: #f1f5f9;
+            color: #475569;
+            font-size: 14px;
+        }
+
+        input[type="number"], select {
+            width: 80px;
+            padding: 6px 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            text-align: center;
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            cursor: pointer;
+        }
+
+        .badge-price {
+            font-weight: bold;
+            color: var(--primary);
+        }
+
+        .preset-btn {
+            background: #edf2f7;
+            border: 1px solid #cbd5e0;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <div>
+            <h1>نظام إدارة وتسعير المنتجات آلياً</h1>
+            <small style="color: #64748b;">مربوط مباشرة مع متجر سلة والبورصة العالمية</small>
+        </div>
+        <button class="btn btn-sync" onclick="importProducts()">سحب المنتجات من سلة 🔄</button>
+    </header>
+
+    <table class="products-table">
+        <thead>
+            <tr>
+                <th>المنتج</th>
+                <th>النوع / العيار</th>
+                <th>الوزن (جرام)</th>
+                <th>المصنعية/جرام</th>
+                <th>رسوم ثابته</th>
+                <th>هامش الربح %</th>
+                <th>خاضع للضريبة (15%)</th>
+                <th>السعر المحسوب</th>
+                <th>إجراء</th>
+            </tr>
+        </thead>
+        <tbody id="products-list">
+            <tr>
+                <td colspan="9" style="text-align: center;">جاري تحميل المنتجات...</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<script>
+    // رابط السيرفر على Render
+    const API_URL = 'https://gold-salla-backend.onrender.com';
+
+    // جلب المنتجات عند فتح الصفحة
+    document.addEventListener('DOMContentLoaded', loadProducts);
+
+    async function loadProducts() {
+        try {
+            const res = await fetch(`${API_URL}/api/products`);
+            const data = await res.json();
+            
+            if (!data.success) throw new Error(data.error);
+
+            const container = document.getElementById('products-list');
+            container.innerHTML = '';
+
+            if (data.products.length === 0) {
+                container.innerHTML = `<tr><td colspan="9" style="text-align:center;">لا توجد منتجات مخزنة. اضغط على "سحب المنتجات من سلة" في الأعلى.</td></tr>`;
+                return;
+            }
+
+            data.products.forEach(p => {
+                const tr = document.createElement('tr');
+                tr.id = `row-${p.id}`;
+                tr.innerHTML = `
+                    <td><strong>${p.name}</strong><br><small style="color:#94a3b8;">${p.sku || ''}</small></td>
+                    <td>
+                        <select id="karat-${p.id}">
+                            <option value="24" ${p.karat == 24 ? 'selected' : ''}>24</option>
+                            <option value="22" ${p.karat == 22 ? 'selected' : ''}>22</option>
+                            <option value="21" ${p.karat == 21 ? 'selected' : ''}>21</option>
+                            <option value="18" ${p.karat == 18 ? 'selected' : ''}>18</option>
+                        </select>
+                    </td>
+                    <td><input type="number" step="0.001" id="weight-${p.id}" value="${p.weight || 0}"></td>
+                    <td><input type="number" step="0.5" id="workmanship-${p.id}" value="${p.workmanship_per_gram || 0}"></td>
+                    <td><input type="number" step="1" id="extra-${p.id}" value="${p.extra_fee || 0}"></td>
+                    <td><input type="number" step="0.5" id="profit-${p.id}" value="${p.profit_margin_percent || 0}"></td>
+                    <td style="text-align:center;">
+                        <input type="checkbox" id="taxable-${p.id}" ${p.is_taxable ? 'checked' : ''}>
+                    </td>
+                    <td class="badge-price" id="price-${p.id}">${p.current_price || 0} ر.س</td>
+                    <td>
+                        <button class="btn" onclick="saveProduct(${p.id})">حفظ وتحديث سلة</button>
+                    </td>
+                `;
+                container.appendChild(tr);
+            });
+
+        } catch (err) {
+            alert('حدث خطأ أثناء جلب المنتجات: ' + err.message);
+        }
+    }
+
+    // سحب المنتجات من سلة
+    async function importProducts() {
+        if(!confirm('هل تريد سحب واستيراد كافة المنتجات من متجرك بسلة؟')) return;
+        try {
+            const res = await fetch(`${API_URL}/api/products/import`, { method: 'POST' });
+            const data = await res.json();
+            alert(data.message || 'تم سحب المنتجات بنجاح');
+            loadProducts();
+        } catch (err) {
+            alert('فشل سحب المنتجات: ' + err.message);
+        }
+    }
+
+    // حفظ تفاصيل المنتج وتحديث السعر
+    async function saveProduct(id) {
+        const payload = {
+            metal_type: 'gold',
+            karat: parseInt(document.getElementById(`karat-${id}`).value),
+            weight: parseFloat(document.getElementById(`weight-${id}`).value),
+            workmanship_per_gram: parseFloat(document.getElementById(`workmanship-${id}`).value),
+            extra_fee: parseFloat(document.getElementById(`extra-${id}`).value),
+            profit_margin_percent: parseFloat(document.getElementById(`profit-${id}`).value),
+            is_taxable: document.getElementById(`taxable-${id}`).checked
+        };
+
+        try {
+            const res = await fetch(`${API_URL}/api/products/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+
+            if (data.success) {
+                document.getElementById(`price-${id}`).innerText = `${data.product.current_price} ر.س`;
+                alert('تم تحديث بيانات المنتج وسعره في سلة بنجاح!');
+            } else {
+                throw new Error(data.error);
+            }
+        } catch (err) {
+            alert('حدث خطأ أثناء الحفظ: ' + err.message);
+        }
+    }
+</script>
+
+</body>
+</html>
