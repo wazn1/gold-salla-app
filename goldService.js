@@ -1,63 +1,50 @@
 const axios = require('axios');
-require('dotenv').config();
-
-const GOLD_API_KEY = process.env.GOLD_API_KEY;
-const USD_TO_SAR = parseFloat(process.env.USD_TO_SAR) || 3.75;
 
 async function getLivePrices() {
-    try {
-        const response = await axios.get('https://www.goldapi.io/api/XAU/USD', {
-            headers: {
-                'x-api-key': GOLD_API_KEY,
-                'Content-Type': 'application/json'
-            }
-        });
+  try {
+    const response = await axios.get('https://app.goldapi.net/api/XAU/USD', {
+      headers: {
+        'x-api-key': process.env.GOLD_API_KEY,
+        'Content-Type': 'application/json'
+      }
+    });
 
-        const ouncePriceUSD = response.data.price;
-        const ouncePriceSAR = ouncePriceUSD * USD_TO_SAR;
-        const gram24SAR = ouncePriceSAR / 31.1035;
+    const priceUsdOunce = response.data.price;
+    const usdToSar = parseFloat(process.env.USD_TO_SAR) || 3.75;
+    const priceGram24 = (priceUsdOunce / 31.1034768) * usdToSar;
 
-        return {
-            gold24: gram24SAR,
-            gold22: gram24SAR * (22 / 24),
-            gold21: gram24SAR * (21 / 24),
-            gold18: gram24SAR * (18 / 24),
-            silverGram: 3.50 // سعر افتراضي أو استدعاء XAG/USD
-        };
-    } catch (error) {
-        console.error('خطأ في جلب أسعار الذهب:', error.message);
-        throw error;
-    }
+    return {
+      karat24: priceGram24,
+      karat22: priceGram24 * (22 / 24),
+      karat21: priceGram24 * (21 / 24),
+      karat18: priceGram24 * (18 / 24),
+      updated_at: new Date()
+    };
+  } catch (error) {
+    console.error('GoldAPI Error:', error.response?.data || error.message);
+    throw new Error('فشل جلب أسعار الذهب المباشرة');
+  }
 }
 
 function calculateProductPrice(product, liveRates) {
-    let baseGramPrice = 0;
-    
-    if (product.metal_type === 'silver') {
-        baseGramPrice = liveRates.silverGram;
-    } else {
-        baseGramPrice = liveRates[`gold${product.karat}`] || liveRates.gold21;
-    }
+  const karatKey = `karat${product.karat}`;
+  const baseGramPrice = liveRates[karatKey] || liveRates.karat21;
+  
+  const metalCost = parseFloat(product.weight) * baseGramPrice;
+  const workmanshipCost = parseFloat(product.weight) * parseFloat(product.workmanship_per_gram || 0);
+  const extraFee = parseFloat(product.extra_fee || 0);
+  
+  let subtotal = metalCost + workmanshipCost + extraFee;
+  
+  if (product.profit_margin_percent > 0) {
+    subtotal += subtotal * (parseFloat(product.profit_margin_percent) / 100);
+  }
 
-    const weight = parseFloat(product.weight) || 0;
-    const workmanship = parseFloat(product.workmanship_per_gram) || 0;
-    const extraFee = parseFloat(product.extra_fee) || 0;
-    const profitMargin = parseFloat(product.profit_margin_percent) || 0;
+  if (product.is_taxable) {
+    subtotal += subtotal * 0.15; // إضافة الضريبة 15%
+  }
 
-    // 1. حساب تكلفة المعدن الخام
-    const metalCost = weight * baseGramPrice;
-
-    // 2. حساب التكلفة الإجمالية (معدن + مصنعية + رسم إضافي)
-    const totalCost = metalCost + (weight * workmanship) + extraFee;
-
-    // 3. إضافة نسبة الزيادة الربحية
-    const pricePreTax = totalCost * (1 + (profitMargin / 100));
-
-    // 4. تطبيق ضريبة القيمة المضافة 15% إذا كان المنتج خاضعاً
-    const finalPrice = product.is_taxable ? pricePreTax * 1.15 : pricePreTax;
-
-    return Math.round(finalPrice * 100) / 100;
+  return Math.round(subtotal * 100) / 100;
 }
 
 module.exports = { getLivePrices, calculateProductPrice };
-
