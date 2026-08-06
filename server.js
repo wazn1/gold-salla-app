@@ -84,4 +84,42 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });
+const { Pool } = require('pg');
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
+const initDb = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS store_settings (
+          id SERIAL PRIMARY KEY,
+          merchant_id VARCHAR(255) UNIQUE NOT NULL,
+          access_token TEXT NOT NULL,
+          refresh_token TEXT NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS products (
+          id SERIAL PRIMARY KEY,
+          salla_product_id VARCHAR(255) UNIQUE NOT NULL,
+          name VARCHAR(255) NOT NULL,
+          sku VARCHAR(100),
+          metal_type VARCHAR(20) DEFAULT 'gold',
+          karat INT NOT NULL DEFAULT 21,
+          weight DECIMAL(10,3) NOT NULL DEFAULT 0.000,
+          workmanship_per_gram DECIMAL(10,2) DEFAULT 0.00,
+          extra_fee DECIMAL(10,2) DEFAULT 0.00,
+          profit_margin_percent DECIMAL(5,2) DEFAULT 0.00,
+          is_taxable BOOLEAN DEFAULT TRUE,
+          current_price DECIMAL(10,2) DEFAULT 0.00,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    console.log("Database tables verified/created successfully.");
+  } catch (err) {
+    console.error("Database initialization error:", err);
+  }
+};
+
+initDb();
