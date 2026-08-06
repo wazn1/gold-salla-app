@@ -2,7 +2,8 @@ const axios = require('axios');
 
 async function getLivePrices() {
   try {
-    const response = await axios.get('https://app.goldapi.net/api/XAU/USD', {
+    // تم إضافة /price/ في المسار لتحديد الرابط الصحيح
+    const response = await axios.get('https://app.goldapi.net/api/price/XAU/USD', {
       headers: {
         'x-api-key': process.env.GOLD_API_KEY,
         'Content-Type': 'application/json'
@@ -41,7 +42,7 @@ function calculateProductPrice(product, liveRates) {
   }
 
   if (product.is_taxable) {
-    subtotal += subtotal * 0.15; // إضافة الضريبة 15%
+    subtotal += subtotal * 0.15;
   }
 
   return Math.round(subtotal * 100) / 100;
