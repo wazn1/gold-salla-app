@@ -1,34 +1,47 @@
 const axios = require('axios');
 const db = require('./db');
 
-async function getSallaToken() {
-    const res = await db.query('SELECT access_token FROM store_settings LIMIT 1');
-    return res.rows[0]?.access_token;
+async function getAccessToken() {
+  const { rows } = await db.query('SELECT access_token FROM store_settings ORDER BY id DESC LIMIT 1');
+  if (rows.length === 0) {
+    throw new Error('لم يتم العثور على Access Token في قاعدة البيانات');
+  }
+  return rows[0].access_token;
 }
 
 async function fetchSallaProducts() {
-    const token = await getSallaToken();
-    if (!token) throw new Error("لا يوجد Access Token لمنصة سلة");
-
+  try {
+    const token = await getAccessToken();
     const response = await axios.get('https://api.salla.dev/admin/v2/products', {
-        headers: { 'Authorization': `Bearer ${token}` }
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
     });
-    return response.data.data;
+
+    // إرجاع مصفوفة المنتجات من استجابة سلة
+    return response.data.data || [];
+  } catch (error) {
+    console.error('Salla Fetch Error Details:', error.response?.data || error.message);
+    throw new Error('فشل جلب المنتجات من سلة: ' + (error.response?.data?.error?.message || error.message));
+  }
 }
 
 async function updateSallaProductPrice(sallaProductId, newPrice) {
-    const token = await getSallaToken();
-    if (!token) throw new Error("لا يوجد Access Token لمنصة سلة");
-
+  try {
+    const token = await getAccessToken();
     await axios.put(`https://api.salla.dev/admin/v2/products/${sallaProductId}`, {
-        price: newPrice
+      price: newPrice
     }, {
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        }
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
     });
+  } catch (error) {
+    console.error('Salla Update Price Error:', error.response?.data || error.message);
+    throw new Error('فشل تحديث السعر في سلة');
+  }
 }
 
 module.exports = { fetchSallaProducts, updateSallaProductPrice };
-
