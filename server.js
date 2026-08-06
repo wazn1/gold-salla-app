@@ -10,7 +10,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// إنشاء الجداول في قاعدة البيانات عند التشغيل
+// 1. إنشاء الجداول في قاعدة البيانات عند التشغيل
 const initDb = async () => {
   try {
     await db.query(`
@@ -62,20 +62,31 @@ app.get('/api/live-prices', async (req, res) => {
     }
 });
 
-// API 2: سحب المنتجات من سلة وتخزينها في التطبيق
+// API 2: سحب المنتجات من سلة وتخزينها في التطبيق (معالجة قراءة السعر بأمان لتفادي خطأ 500)
 app.post('/api/products/import', async (req, res) => {
     try {
         const sallaProducts = await fetchSallaProducts();
+        
         for (const p of sallaProducts) {
+            // استخراج السعر بأمان سواء كان كائن أو رقم أو نص
+            let currentPrice = 0;
+            if (p.price && typeof p.price === 'object' && p.price.amount !== undefined) {
+                currentPrice = parseFloat(p.price.amount);
+            } else if (typeof p.price === 'number' || typeof p.price === 'string') {
+                currentPrice = parseFloat(p.price);
+            }
+
             await db.query(`
                 INSERT INTO products (salla_product_id, name, sku, current_price)
                 VALUES ($1, $2, $3, $4)
                 ON CONFLICT (salla_product_id) DO UPDATE 
                 SET name = EXCLUDED.name, current_price = EXCLUDED.current_price
-            `, [p.id, p.name, p.sku || '', p.price ? p.price.amount : 0]);
+            `, [String(p.id), p.name || 'منتج بدون اسم', p.sku || '', currentPrice]);
         }
+
         res.json({ success: true, message: `تم سحب ${sallaProducts.length} منتج بنجاح` });
     } catch (err) {
+        console.error('Import Error:', err.message);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -90,7 +101,7 @@ app.get('/api/products', async (req, res) => {
     }
 });
 
-// API 4: تحديث تفاصيل الذهب لمنتج معين (عيار، وزن، مصنعية)
+// API 4: تحديث تفاصيل الذهب لمنتج معين (عيار، وزن، مصنعية) وتعديل سعره في سلة فوراً
 app.put('/api/products/:id', async (req, res) => {
     const { id } = req.params;
     const { metal_type, karat, weight, workmanship_per_gram, extra_fee, profit_margin_percent, is_taxable } = req.body;
@@ -123,7 +134,24 @@ app.put('/api/products/:id', async (req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 3000;
+// API 5: استقبال وتخزين رموز التخويل عند ربط المتجر بتطبيق سلة
+app.post('/api/salla/callback', async (req, res) => {
+    const { merchant_id, access_token, refresh_token } = req.body;
+    try {
+        await db.query(`
+            INSERT INTO store_settings (merchant_id, access_token, refresh_token)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (merchant_id) DO UPDATE 
+            SET access_token = EXCLUDED.access_token, refresh_token = EXCLUDED.refresh_token
+        `, [merchant_id, access_token, refresh_token]);
+        
+        res.json({ success: true, message: 'تم ربط المتجر بنجاح' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });
