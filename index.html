@@ -141,6 +141,44 @@
             <button class="btn" onclick="loginMerchant()">دخول المتجر</button>
         </div>
     </div>
+    <!-- كرت أسعار الذهب المباشرة -->
+<div class="gold-ticker-card" style="background: #ffffff; border-radius: 12px; padding: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); margin-bottom: 20px; text-align: right; border: 1px solid #e2e8f0;">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #edf2f7; padding-bottom: 8px; margin-bottom: 12px;">
+        <h3 style="margin: 0; font-size: 16px; color: #1a202c; display: flex; align-items: center; gap: 6px;">
+            <span style="color: #d69e2e;">📊</span> أسعار الذهب المباشرة
+        </h3>
+        <span id="live-indicator" style="font-size: 11px; background: #e6fffa; color: #234e52; padding: 2px 8px; border-radius: 12px; border: 1px solid #b2f5ea;">
+            🟢 تحديث حي (كل 10ث)
+        </span>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; font-size: 13px;">
+        <div style="background: #f7fafc; padding: 8px 10px; border-radius: 8px; border-right: 3px solid #d69e2e;">
+            <span style="color: #718096; display: block; font-size: 11px;">سعر الأونصة (USD):</span>
+            <strong id="rate-ounce-usd" style="color: #2d3748; font-size: 14px;">---</strong>
+        </div>
+        <div style="background: #f7fafc; padding: 8px 10px; border-radius: 8px; border-right: 3px solid #319795;">
+            <span style="color: #718096; display: block; font-size: 11px;">سعر الأونصة (SAR):</span>
+            <strong id="rate-ounce-sar" style="color: #2d3748; font-size: 14px;">---</strong>
+        </div>
+        <div style="background: #fffaf0; padding: 8px 10px; border-radius: 8px; border: 1px solid #feebc8;">
+            <span style="color: #744210; font-size: 12px;">ذهب عيار 24:</span>
+            <strong id="rate-24k" style="color: #975a16; float: left;">--- ر.س</strong>
+        </div>
+        <div style="background: #fffaf0; padding: 8px 10px; border-radius: 8px; border: 1px solid #feebc8;">
+            <span style="color: #744210; font-size: 12px;">ذهب عيار 22:</span>
+            <strong id="rate-22k" style="color: #975a16; float: left;">--- ر.س</strong>
+        </div>
+        <div style="background: #fffaf0; padding: 8px 10px; border-radius: 8px; border: 1px solid #feebc8;">
+            <span style="color: #744210; font-size: 12px;">ذهب عيار 21:</span>
+            <strong id="rate-21k" style="color: #975a16; float: left;">--- ر.س</strong>
+        </div>
+        <div style="background: #fffaf0; padding: 8px 10px; border-radius: 8px; border: 1px solid #feebc8;">
+            <span style="color: #744210; font-size: 12px;">ذهب عيار 18:</span>
+            <strong id="rate-18k" style="color: #975a16; float: left;">--- ر.س</strong>
+        </div>
+    </div>
+</div>
 
     <header>
         <div>
