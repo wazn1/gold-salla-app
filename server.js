@@ -10,7 +10,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// إنشاء وتحديث الجداول تلقائياً
+// إنشاء وتحديث الجداول وتجهيز القيود
 const initDb = async () => {
   try {
     await db.query(`
@@ -40,8 +40,7 @@ const initDb = async () => {
           current_price DECIMAL(10,2) DEFAULT 0.00,
           original_price DECIMAL(10,2) DEFAULT 0.00,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          CONSTRAINT unique_merchant_product UNIQUE (merchant_id, salla_product_id)
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
       ALTER TABLE store_settings ADD COLUMN IF NOT EXISTS subscription_expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '30 days');
@@ -49,6 +48,16 @@ const initDb = async () => {
       ALTER TABLE products ADD COLUMN IF NOT EXISTS original_price DECIMAL(10,2) DEFAULT 0.00;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS merchant_id VARCHAR(255) DEFAULT 'DEFAULT_STORE';
       ALTER TABLE products ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+      -- إضافة قيد الفرادة بأمان لضمان عمل ON CONFLICT
+      DO $$ 
+      BEGIN 
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'unique_merchant_product'
+        ) THEN
+          ALTER TABLE products ADD CONSTRAINT unique_merchant_product UNIQUE (merchant_id, salla_product_id);
+        END IF;
+      END $$;
     `);
     console.log("Database schema verified and updated successfully.");
   } catch (err) {
@@ -63,7 +72,7 @@ app.get('/health', (req, res) => {
     res.json({ status: 'OK', timestamp: new Date() });
 });
 
-// معلومات الاشتراك والمتجر
+// معلومات الاشتراك
 app.get('/api/merchant/info', async (req, res) => {
     const merchant_id = req.query.merchant_id || 'DEFAULT_STORE';
     try {
@@ -78,13 +87,12 @@ app.get('/api/merchant/info', async (req, res) => {
     }
 });
 
-// جلب جميع منتجات متجر معين
+// جلب المنتجات
 app.get('/api/products', async (req, res) => {
     const merchant_id = req.query.merchant_id || 'DEFAULT_STORE';
     try {
         const { rows } = await db.query('SELECT * FROM products WHERE merchant_id = $1 ORDER BY id DESC', [merchant_id]);
         
-        // استعلام بأمان لتجنب الأخطاء عند عدم وجود تواريخ
         const lastImportRes = await db.query('SELECT MAX(created_at) as last_import FROM products WHERE merchant_id = $1', [merchant_id]);
         const lastUpdateRes = await db.query('SELECT MAX(updated_at) as last_update FROM products WHERE merchant_id = $1', [merchant_id]);
         
@@ -99,7 +107,7 @@ app.get('/api/products', async (req, res) => {
     }
 });
 
-// سحب المنتجات من سلة
+// سحب كافة المنتجات
 app.post('/api/products/import', async (req, res) => {
     const merchant_id = req.body.merchant_id || 'DEFAULT_STORE';
     try {
@@ -137,7 +145,7 @@ app.post('/api/products/import', async (req, res) => {
     }
 });
 
-// استدعاء منتج واحد باسمه أو برقمه
+// استدعاء منتج واحد
 app.post('/api/products/fetch-single', async (req, res) => {
     const { query, merchant_id } = req.body;
     try {
@@ -160,7 +168,7 @@ app.post('/api/products/fetch-single', async (req, res) => {
     }
 });
 
-// تحديث منتج واحد
+// تحديث منتج
 app.put('/api/products/:id', async (req, res) => {
     const { id } = req.params;
     const { karat, weight, workmanship_per_gram, extra_fee, profit_margin_percent, discount_percent, is_taxable, merchant_id } = req.body;
@@ -191,7 +199,7 @@ app.put('/api/products/:id', async (req, res) => {
     }
 });
 
-// تحديث جميع المنتجات دفعة واحدة
+// تحديث الكل
 app.post('/api/products/update-all', async (req, res) => {
     const merchant_id = req.body.merchant_id || 'DEFAULT_STORE';
     try {
