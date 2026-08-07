@@ -62,7 +62,7 @@ app.get('/api/live-prices', async (req, res) => {
     }
 });
 
-// API 2: سحب المنتجات من سلة وتخزينها في التطبيق (معالجة قراءة السعر بأمان لتفادي خطأ 500)
+// API 2: سحب المنتجات من سلة وتخزينها في التطبيق (مع قراءة الوزن والسعر بأمان)
 app.post('/api/products/import', async (req, res) => {
     try {
         const sallaProducts = await fetchSallaProducts();
@@ -76,12 +76,22 @@ app.post('/api/products/import', async (req, res) => {
                 currentPrice = parseFloat(p.price);
             }
 
+            // استخراج الوزن من سلة إذا كان محدداً مسبقاً
+            let productWeight = 0;
+            if (p.weight && typeof p.weight === 'object' && p.weight.value !== undefined) {
+                productWeight = parseFloat(p.weight.value);
+            } else if (typeof p.weight === 'number' || typeof p.weight === 'string') {
+                productWeight = parseFloat(p.weight);
+            }
+
             await db.query(`
-                INSERT INTO products (salla_product_id, name, sku, current_price)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO products (salla_product_id, name, sku, weight, current_price)
+                VALUES ($1, $2, $3, $4, $5)
                 ON CONFLICT (salla_product_id) DO UPDATE 
-                SET name = EXCLUDED.name, current_price = EXCLUDED.current_price
-            `, [String(p.id), p.name || 'منتج بدون اسم', p.sku || '', currentPrice]);
+                SET name = EXCLUDED.name,
+                    weight = CASE WHEN products.weight = 0 THEN EXCLUDED.weight ELSE products.weight END,
+                    current_price = EXCLUDED.current_price
+            `, [String(p.id), p.name || 'منتج بدون اسم', p.sku || '', productWeight, currentPrice]);
         }
 
         res.json({ success: true, message: `تم سحب ${sallaProducts.length} منتج بنجاح` });
@@ -101,7 +111,7 @@ app.get('/api/products', async (req, res) => {
     }
 });
 
-// API 4: تحديث تفاصيل الذهب لمنتج معين (عيار، وزن، مصنعية) وتعديل سعره في سلة فوراً
+// API 4: تحديث تفاصيل الذهب لمنتج معين وتعديل سعره وزنه في سلة فوراً
 app.put('/api/products/:id', async (req, res) => {
     const { id } = req.params;
     const { metal_type, karat, weight, workmanship_per_gram, extra_fee, profit_margin_percent, is_taxable } = req.body;
@@ -121,11 +131,11 @@ app.put('/api/products/:id', async (req, res) => {
 
         const updatedProduct = rows[0];
         
-        // إعادة حساب السعر وتحديث سلة فوراً
+        // إعادة حساب السعر وتحديث سلة بالسعر والوزن الجديدين فوراً
         const liveRates = await getLivePrices();
         const newPrice = calculateProductPrice(updatedProduct, liveRates);
         
-        await updateSallaProductPrice(updatedProduct.salla_product_id, newPrice);
+        await updateSallaProductPrice(updatedProduct.salla_product_id, newPrice, updatedProduct.weight);
         await db.query('UPDATE products SET current_price = $1 WHERE id = $2', [newPrice, id]);
 
         res.json({ success: true, product: { ...updatedProduct, current_price: newPrice } });
@@ -151,10 +161,6 @@ app.post('/api/salla/callback', async (req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
 // مسار مؤقت لإدخال التوكن مباشرة
 app.get('/api/setup-token', async (req, res) => {
     const { merchant_id, access_token, refresh_token } = req.query;
@@ -169,8 +175,13 @@ app.get('/api/setup-token', async (req, res) => {
             SET access_token = EXCLUDED.access_token, refresh_token = EXCLUDED.refresh_token
         `, [merchant_id, access_token, refresh_token || 'dummy_refresh']);
 
-        res.send(' تم حفظ Access Token بنجاح في قاعدة البيانات!');
+        res.send('تم حفظ Access Token بنجاح في قاعدة البيانات!');
     } catch (err) {
         res.status(500).send('خطأ أثناء الحفظ: ' + err.message);
     }
+});
+
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
 });
