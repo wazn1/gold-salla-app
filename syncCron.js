@@ -1,53 +1,48 @@
+const cron = require('node-cron');
 const db = require('./db');
 const { getLivePrices, calculateProductPrice } = require('./goldService');
 const { updateSallaProductPrice } = require('./sallaService');
 
 function startSyncCron() {
-  setInterval(async () => {
+  // التشغيل كل 10 ثوانٍ
+  cron.schedule('*/10 * * * * *', async () => {
     try {
-      // 1. جلب أسعار الذهب المباشرة
+      // جلب أسعار الذهب الحية
       const liveRates = await getLivePrices();
+      if (!liveRates) return;
 
-      // 2. جلب جميع المتاجر ذات الاشتراك النشط فقط
-      const { rows: stores } = await db.query(`
-        SELECT merchant_id FROM store_settings 
-        WHERE subscription_expires_at > NOW() OR subscription_expires_at IS NULL
-      `);
+      // جلب جميع المنتجات التي تحتوي على وزن
+      const { rows: products } = await db.query('SELECT * FROM products WHERE weight > 0');
 
-      for (const store of stores) {
-        const { rows: products } = await db.query(
-          'SELECT * FROM products WHERE merchant_id = $1',
-          [store.merchant_id]
-        );
-
-        for (const product of products) {
-          if (!product.weight || parseFloat(product.weight) <= 0) continue;
-
+      for (const product of products) {
+        try {
+          // حساب السعر الجديد
           const { originalPrice, finalPrice } = calculateProductPrice(product, liveRates);
 
-          if (parseFloat(product.current_price) !== parseFloat(finalPrice)) {
-            await updateSallaProductPrice(
-              product.salla_product_id,
-              originalPrice,
-              product.discount_percent,
-              product.weight,
-              store.merchant_id
-            );
+          // إرسال السعر والخصم إلى سلة
+          await updateSallaProductPrice(
+            product.salla_product_id, 
+            originalPrice, 
+            product.discount_percent, 
+            product.weight
+          );
 
-            await db.query(`
-              UPDATE products 
-              SET current_price = $1, original_price = $2, updated_at = NOW() 
-              WHERE id = $3
-            `, [finalPrice, originalPrice, product.id]);
-
-            console.log(`[مزامنة آليّة] ${product.name} (متجر: ${store.merchant_id}) -> ${finalPrice} ر.س`);
-          }
+          // تحديث السعر في قاعدة البيانات
+          await db.query(
+            'UPDATE products SET current_price = $1, original_price = $2, updated_at = NOW() WHERE id = $3',
+            [finalPrice, originalPrice, product.id]
+          );
+        } catch (singleErr) {
+          // تجاوز خطأ منتج واحد لضمان استمرار الدورة للمنتجات الأخرى
+          console.error(`Error updating product ID ${product.id}:`, singleErr.message);
         }
       }
     } catch (err) {
-      console.error('خطأ أثناء مزامنة المتاجر:', err.message);
+      console.error('Error in automatic sync cron:', err.message);
     }
-  }, 10000); // مزامنة كل 10 ثوانٍ
+  });
+
+  console.log('Automatic price sync cron started (running every 10 seconds).');
 }
 
 module.exports = { startSyncCron };
