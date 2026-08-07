@@ -18,8 +18,6 @@ async function fetchSallaProducts() {
         'Content-Type': 'application/json'
       }
     });
-
-    // إرجاع مصفوفة المنتجات من استجابة سلة
     return response.data.data || [];
   } catch (error) {
     console.error('Salla Fetch Error Details:', error.response?.data || error.message);
@@ -27,17 +25,43 @@ async function fetchSallaProducts() {
   }
 }
 
-// تحديث السعر والوزن معاً في سلة
-async function updateSallaProductPrice(sallaProductId, newPrice, weight = null) {
+async function fetchSingleSallaProduct(query) {
   try {
     const token = await getAccessToken();
-    const payload = {
-      price: newPrice
-    };
+    const response = await axios.get(`https://api.salla.dev/admin/v2/products?keyword=${encodeURIComponent(query)}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    const products = response.data.data || [];
+    return products.find(p => String(p.id) === String(query) || p.name.includes(query)) || products[0] || null;
+  } catch (error) {
+    throw new Error('فشل البحث عن المنتج في سلة');
+  }
+}
 
-    // إرسال الوزن إلى سلة فقط في حال كان أكبر من 0
+async function updateSallaProductPrice(sallaProductId, calculatedPrice, discountPercent = 0, weight = null) {
+  try {
+    const token = await getAccessToken();
+    const payload = {};
+
+    const basePrice = Number(parseFloat(calculatedPrice).toFixed(2));
+    const discount = Number(parseFloat(discountPercent || 0));
+
+    if (discount > 0 && discount < 100) {
+      const salePrice = Number((basePrice * (1 - discount / 100)).toFixed(2));
+      payload.regular_price = basePrice;
+      payload.sale_price = salePrice;
+      payload.price = salePrice;
+    } else {
+      payload.price = basePrice;
+      payload.regular_price = basePrice;
+      payload.sale_price = null;
+    }
+
     if (weight !== null && parseFloat(weight) > 0) {
-      payload.weight = parseFloat(weight);
+      payload.weight = Number(parseFloat(weight).toFixed(3));
     }
 
     await axios.put(`https://api.salla.dev/admin/v2/products/${sallaProductId}`, payload, {
@@ -52,4 +76,4 @@ async function updateSallaProductPrice(sallaProductId, newPrice, weight = null) 
   }
 }
 
-module.exports = { fetchSallaProducts, updateSallaProductPrice };
+module.exports = { fetchSallaProducts, fetchSingleSallaProduct, updateSallaProductPrice };
