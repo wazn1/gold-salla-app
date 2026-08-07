@@ -7,10 +7,12 @@ const { startSyncCron } = require('./syncCron');
 require('dotenv').config();
 
 const app = express();
+
+// السماح باتصالات CORS من GitHub Pages ومن كافة المصادر
 app.use(cors());
 app.use(express.json());
 
-// إنشاء وتحديث الجداول وتجهيز القيود
+// إنشاء وتحديث الجداول والقيود في قاعدة البيانات
 const initDb = async () => {
   try {
     await db.query(`
@@ -49,7 +51,7 @@ const initDb = async () => {
       ALTER TABLE products ADD COLUMN IF NOT EXISTS merchant_id VARCHAR(255) DEFAULT 'DEFAULT_STORE';
       ALTER TABLE products ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 
-      -- إضافة قيد الفرادة بأمان لضمان عمل ON CONFLICT
+      -- إضافة قيد الفرادة بأمان لضمان عمل عمليات ON CONFLICT
       DO $$ 
       BEGIN 
         IF NOT EXISTS (
@@ -68,16 +70,30 @@ const initDb = async () => {
 initDb();
 startSyncCron();
 
+// مسار فحص حالة السيرفر
 app.get('/health', (req, res) => {
     res.json({ status: 'OK', timestamp: new Date() });
 });
 
-// معلومات الاشتراك
+// 🟢 مسار جلب أسعار الذهب المباشرة والعيارات للواجهة
+app.get('/api/gold-rates', async (req, res) => {
+    try {
+        const rates = await getLivePrices();
+        if (!rates) {
+            return res.status(503).json({ success: false, error: 'تعذر جلب أسعار الذهب حالياً' });
+        }
+        res.json({ success: true, rates, timestamp: new Date() });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// جلب معلومات اشتراك التاجر
 app.get('/api/merchant/info', async (req, res) => {
     const merchant_id = req.query.merchant_id || 'DEFAULT_STORE';
     try {
         const { rows } = await db.query('SELECT merchant_id, subscription_expires_at FROM store_settings WHERE merchant_id = $1', [merchant_id]);
-        if(rows.length > 0) {
+        if (rows.length > 0) {
             res.json({ success: true, merchant: rows[0] });
         } else {
             res.json({ success: true, merchant: { merchant_id, subscription_expires_at: new Date(Date.now() + 30*24*60*60*1000) } });
@@ -87,7 +103,7 @@ app.get('/api/merchant/info', async (req, res) => {
     }
 });
 
-// جلب المنتجات
+// جلب قائمة المنتجات
 app.get('/api/products', async (req, res) => {
     const merchant_id = req.query.merchant_id || 'DEFAULT_STORE';
     try {
@@ -107,7 +123,7 @@ app.get('/api/products', async (req, res) => {
     }
 });
 
-// سحب كافة المنتجات
+// سحب جميع المنتجات من سلة
 app.post('/api/products/import', async (req, res) => {
     const merchant_id = req.body.merchant_id || 'DEFAULT_STORE';
     try {
@@ -145,12 +161,12 @@ app.post('/api/products/import', async (req, res) => {
     }
 });
 
-// استدعاء منتج واحد
+// استدعاء منتج واحد برقم ה-ID أو الاسم
 app.post('/api/products/fetch-single', async (req, res) => {
     const { query, merchant_id } = req.body;
     try {
         const product = await fetchSingleSallaProduct(query);
-        if(!product) return res.status(404).json({ success: false, error: 'لم يتم العثور على المنتج في سلة' });
+        if (!product) return res.status(404).json({ success: false, error: 'لم يتم العثور على المنتج في سلة' });
 
         let currentPrice = parseFloat(product.price?.amount || product.price || 0);
         let weight = parseFloat(product.weight?.value || product.weight || 0);
@@ -163,15 +179,15 @@ app.post('/api/products/fetch-single', async (req, res) => {
         `, [merchant_id || 'DEFAULT_STORE', String(product.id), product.name, product.sku || '', weight, currentPrice]);
 
         res.json({ success: true, message: `تم استدعاء المنتج "${product.name}" بنجاح` });
-    } catch(err) {
+    } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-// تحديث منتج
+// تحديث إعدادات وسعر منتج معين
 app.put('/api/products/:id', async (req, res) => {
     const { id } = req.params;
-    const { karat, weight, workmanship_per_gram, extra_fee, profit_margin_percent, discount_percent, is_taxable, merchant_id } = req.body;
+    const { karat, weight, workmanship_per_gram, extra_fee, profit_margin_percent, discount_percent, is_taxable } = req.body;
 
     try {
         const { rows } = await db.query(`
@@ -199,43 +215,35 @@ app.put('/api/products/:id', async (req, res) => {
     }
 });
 
-// تحديث الكل
+// تحديث جميع المنتجات يدوياً
 app.post('/api/products/update-all', async (req, res) => {
     const merchant_id = req.body.merchant_id || 'DEFAULT_STORE';
     try {
         const liveRates = await getLivePrices();
         const { rows: products } = await db.query('SELECT * FROM products WHERE merchant_id = $1', [merchant_id]);
 
-        for(const p of products) {
-            if(!p.weight || parseFloat(p.weight) <= 0) continue;
+        for (const p of products) {
+            if (!p.weight || parseFloat(p.weight) <= 0) continue;
             const { originalPrice, finalPrice } = calculateProductPrice(p, liveRates);
             await updateSallaProductPrice(p.salla_product_id, originalPrice, p.discount_percent, p.weight);
             await db.query('UPDATE products SET current_price = $1, original_price = $2, updated_at = NOW() WHERE id = $3', [finalPrice, originalPrice, p.id]);
         }
 
         res.json({ success: true, message: 'تم تحديث أسعار وخصومات جميع المنتجات في سلة بنجاح' });
-    } catch(err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-// حذف منتج
-app.delete('/api/products/:id', async (req, res) => {
-    try {
-        await db.query('DELETE FROM products WHERE id = $1', [req.params.id]);
-        res.json({ success: true, message: 'تم حذف المنتج بنجاح' });
-    } catch(err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-// جلب أسعار الذهب والعيارات المباشرة
-app.get('/api/gold-rates', async (req, res) => {
-    try {
-        const rates = await getLivePrices();
-        res.json({ success: true, rates, timestamp: new Date() });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 });
+
+// حذف منتج من النظام
+app.delete('/api/products/:id', async (req, res) => {
+    try {
+        await db.query('DELETE FROM products WHERE id = $1', [req.params.id]);
+        res.json({ success: true, message: 'تم حذف المنتج بنجاح' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
