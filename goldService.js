@@ -2,7 +2,6 @@ const axios = require('axios');
 
 async function getLivePrices() {
   try {
-    // تم إضافة /price/ في المسار لتحديد الرابط الصحيح
     const response = await axios.get('https://app.goldapi.net/api/price/XAU/USD', {
       headers: {
         'x-api-key': process.env.GOLD_API_KEY,
@@ -31,8 +30,8 @@ function calculateProductPrice(product, liveRates) {
   const karatKey = `karat${product.karat}`;
   const baseGramPrice = liveRates[karatKey] || liveRates.karat21;
   
-  const metalCost = parseFloat(product.weight) * baseGramPrice;
-  const workmanshipCost = parseFloat(product.weight) * parseFloat(product.workmanship_per_gram || 0);
+  const metalCost = parseFloat(product.weight || 0) * baseGramPrice;
+  const workmanshipCost = parseFloat(product.weight || 0) * parseFloat(product.workmanship_per_gram || 0);
   const extraFee = parseFloat(product.extra_fee || 0);
   
   let subtotal = metalCost + workmanshipCost + extraFee;
@@ -41,11 +40,25 @@ function calculateProductPrice(product, liveRates) {
     subtotal += subtotal * (parseFloat(product.profit_margin_percent) / 100);
   }
 
-  if (product.is_taxable) {
+  // الاستثناء التام لعيار 24 من الضريبة
+  const isTaxable = Number(product.karat) === 24 ? false : Boolean(product.is_taxable);
+
+  if (isTaxable) {
     subtotal += subtotal * 0.15;
   }
 
-  return Math.round(subtotal * 100) / 100;
+  const calculatedOriginalPrice = Math.round(subtotal * 100) / 100;
+  const discountPercent = parseFloat(product.discount_percent || 0);
+
+  let finalPrice = calculatedOriginalPrice;
+  if (discountPercent > 0 && discountPercent < 100) {
+    finalPrice = calculatedOriginalPrice * (1 - discountPercent / 100);
+  }
+
+  return {
+    originalPrice: calculatedOriginalPrice,
+    finalPrice: Math.round(finalPrice * 100) / 100
+  };
 }
 
 module.exports = { getLivePrices, calculateProductPrice };
