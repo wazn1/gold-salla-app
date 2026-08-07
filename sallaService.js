@@ -27,20 +27,28 @@ async function fetchSallaProducts() {
   }
 }
 
-async function updateSallaProductPrice(sallaProductId, newPrice) {
+// تحديث السعر والوزن معاً في سلة
+async function updateSallaProductPrice(sallaProductId, newPrice, weight = null) {
   try {
     const token = await getAccessToken();
-    await axios.put(`https://api.salla.dev/admin/v2/products/${sallaProductId}`, {
+    const payload = {
       price: newPrice
-    }, {
+    };
+
+    // إرسال الوزن إلى سلة فقط في حال كان أكبر من 0
+    if (weight !== null && parseFloat(weight) > 0) {
+      payload.weight = parseFloat(weight);
+    }
+
+    await axios.put(`https://api.salla.dev/admin/v2/products/${sallaProductId}`, payload, {
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'
       }
     });
   } catch (error) {
-    console.error('Salla Update Price Error:', error.response?.data || error.message);
-    throw new Error('فشل تحديث السعر في سلة');
+    console.error('Salla Update Price/Weight Error:', error.response?.data || error.message);
+    throw new Error('فشل تحديث السعر أو الوزن في سلة');
   }
 }
 
