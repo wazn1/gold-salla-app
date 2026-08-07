@@ -23,7 +23,7 @@
         }
 
         .container {
-            max-width: 1100px;
+            max-width: 1250px;
             margin: 0 auto;
         }
 
@@ -35,7 +35,7 @@
             padding: 20px 30px;
             border-radius: 12px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-            margin-bottom: 25px;
+            margin-bottom: 20px;
             border-right: 6px solid var(--primary);
         }
 
@@ -45,27 +45,45 @@
             color: var(--primary);
         }
 
+        .auth-bar, .stats-bar {
+            background: var(--card-bg);
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+        }
+
+        .stats-badge {
+            background: #edf2f7;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            color: #475569;
+        }
+
         .btn {
             background-color: var(--primary);
             color: white;
             border: none;
-            padding: 10px 18px;
+            padding: 8px 14px;
             border-radius: 6px;
             cursor: pointer;
             font-weight: bold;
             transition: background 0.2s;
+            font-size: 13px;
         }
 
-        .btn:hover {
-            background-color: var(--primary-dark);
-        }
-
-        .btn-sync {
-            background-color: #27ae60;
-        }
-        .btn-sync:hover {
-            background-color: #219150;
-        }
+        .btn:hover { background-color: var(--primary-dark); }
+        .btn-sync { background-color: #27ae60; }
+        .btn-sync:hover { background-color: #219150; }
+        .btn-update-all { background-color: #2980b9; }
+        .btn-update-all:hover { background-color: #1c5980; }
+        .btn-danger { background-color: #e74c3c; }
+        .btn-danger:hover { background-color: #c0392b; }
 
         .products-table {
             width: 100%;
@@ -77,7 +95,7 @@
         }
 
         .products-table th, .products-table td {
-            padding: 14px 16px;
+            padding: 12px 10px;
             text-align: right;
             border-bottom: 1px solid var(--border);
         }
@@ -85,82 +103,137 @@
         .products-table th {
             background-color: #f1f5f9;
             color: #475569;
-            font-size: 14px;
+            font-size: 13px;
         }
 
-        input[type="number"], select {
-            width: 80px;
-            padding: 6px 8px;
+        input[type="number"], input[type="text"], select {
+            width: 70px;
+            padding: 6px;
             border: 1px solid var(--border);
             border-radius: 4px;
             text-align: center;
         }
 
-        .checkbox-label {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            cursor: pointer;
-        }
+        .search-input { width: 180px !important; text-align: right !important; }
 
-        .badge-price {
-            font-weight: bold;
-            color: var(--primary);
-        }
-
-        .preset-btn {
-            background: #edf2f7;
-            border: 1px solid #cbd5e0;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            cursor: pointer;
-        }
+        .badge-price { font-weight: bold; color: var(--primary); }
+        .old-price { text-decoration: line-through; color: #94a3b8; font-size: 11px; margin-left: 4px; }
+        .sub-active { color: #27ae60; font-weight: bold; }
+        .sub-expired { color: #e74c3c; font-weight: bold; }
     </style>
 </head>
 <body>
 
 <div class="container">
+    <!-- شريط تسجيل الدخول والاشتراك -->
+    <div class="auth-bar">
+        <div>
+            <strong>الحساب:</strong> <span id="user-merchant">غير مسجل</span>
+        </div>
+        <div>
+            <strong>حالة الاشتراك:</strong> <span id="user-sub-status" class="sub-expired">غير محدد</span>
+        </div>
+        <div>
+            <strong>ينتهي في:</strong> <span id="user-sub-expiry">-</span>
+        </div>
+        <div style="margin-right: auto;">
+            <input type="text" id="merchant-id-input" placeholder="Merchant ID" style="width: 110px;">
+            <button class="btn" onclick="loginMerchant()">دخول المتجر</button>
+        </div>
+    </div>
+
     <header>
         <div>
             <h1>نظام إدارة وتسعير المنتجات آلياً</h1>
             <small style="color: #64748b;">مربوط مباشرة مع متجر سلة والبورصة العالمية</small>
         </div>
-        <button class="btn btn-sync" onclick="importProducts()">سحب المنتجات من سلة 🔄</button>
+        <div style="display: flex; gap: 10px;">
+            <button class="btn btn-update-all" onclick="updateAllProducts()">تحديث جميع المنتجات ⚡</button>
+            <button class="btn btn-sync" onclick="importProducts()">سحب كافة المنتجات 🔄</button>
+        </div>
     </header>
+
+    <!-- شريط الإحصائيات وسحب منتج واحد -->
+    <div class="stats-bar">
+        <div class="stats-badge">
+            📅 <strong>آخر سحب للمنتجات:</strong> <span id="last-import-time">لم يحدد بعد</span>
+        </div>
+        <div class="stats-badge">
+            ⏰ <strong>آخر تحديث للأسعار:</strong> <span id="last-update-time">لم يحدد بعد</span>
+        </div>
+        <div style="margin-right: auto; display: flex; gap: 6px;">
+            <input type="text" id="single-fetch-query" class="search-input" placeholder="اسم أو ID المنتج في سلة">
+            <button class="btn" onclick="fetchSingleProduct()">استدعاء منتج 🔍</button>
+        </div>
+    </div>
 
     <table class="products-table">
         <thead>
             <tr>
                 <th>المنتج</th>
-                <th>النوع / العيار</th>
-                <th>الوزن (جرام)</th>
-                <th>المصنعية/جرام</th>
+                <th>العيار</th>
+                <th>الوزن (جم)</th>
+                <th>المصنعية</th>
                 <th>رسوم ثابته</th>
                 <th>هامش الربح %</th>
-                <th>خاضع للضريبة (15%)</th>
-                <th>السعر المحسوب</th>
-                <th>إجراء</th>
+                <th>الخصم %</th>
+                <th>ضريبة (15%)</th>
+                <th>السعر الحالي</th>
+                <th>إجراءات</th>
             </tr>
         </thead>
         <tbody id="products-list">
             <tr>
-                <td colspan="9" style="text-align: center;">جاري تحميل المنتجات...</td>
+                <td colspan="10" style="text-align: center;">جاري تحميل المنتجات...</td>
             </tr>
         </tbody>
     </table>
 </div>
 
 <script>
-    // رابط السيرفر على Render
     const API_URL = 'https://gold-salla-backend.onrender.com';
+    let currentMerchantId = localStorage.getItem('merchant_id') || 'DEFAULT_STORE';
 
-    // جلب المنتجات عند فتح الصفحة
-    document.addEventListener('DOMContentLoaded', loadProducts);
+    document.addEventListener('DOMContentLoaded', () => {
+        document.getElementById('merchant-id-input').value = currentMerchantId;
+        loadMerchantInfo();
+        loadProducts();
+    });
+
+    function loginMerchant() {
+        const id = document.getElementById('merchant-id-input').value.trim();
+        if(!id) return alert('يرجى إدخال Merchant ID');
+        localStorage.setItem('merchant_id', id);
+        currentMerchantId = id;
+        loadMerchantInfo();
+        loadProducts();
+    }
+
+    async function loadMerchantInfo() {
+        try {
+            const res = await fetch(`${API_URL}/api/merchant/info?merchant_id=${currentMerchantId}`);
+            const data = await res.json();
+            if (data.success && data.merchant) {
+                document.getElementById('user-merchant').innerText = data.merchant.merchant_id;
+                const isExpired = new Date(data.merchant.subscription_expires_at) < new Date();
+                const statusElem = document.getElementById('user-sub-status');
+                statusElem.innerText = isExpired ? 'منتهي' : 'نشط';
+                statusElem.className = isExpired ? 'sub-expired' : 'sub-active';
+                document.getElementById('user-sub-expiry').innerText = new Date(data.merchant.subscription_expires_at).toLocaleDateString('ar-SA');
+            } else {
+                document.getElementById('user-merchant').innerText = currentMerchantId;
+                document.getElementById('user-sub-status').innerText = 'نشط (تجريبي)';
+                document.getElementById('user-sub-status').className = 'sub-active';
+                document.getElementById('user-sub-expiry').innerText = 'غير محدد';
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    }
 
     async function loadProducts() {
         try {
-            const res = await fetch(`${API_URL}/api/products`);
+            const res = await fetch(`${API_URL}/api/products?merchant_id=${currentMerchantId}`);
             const data = await res.json();
             
             if (!data.success) throw new Error(data.error);
@@ -168,16 +241,26 @@
             const container = document.getElementById('products-list');
             container.innerHTML = '';
 
+            if (data.last_import) document.getElementById('last-import-time').innerText = new Date(data.last_import).toLocaleString('ar-SA');
+            if (data.last_update) document.getElementById('last-update-time').innerText = new Date(data.last_update).toLocaleString('ar-SA');
+
             if (data.products.length === 0) {
-                container.innerHTML = `<tr><td colspan="9" style="text-align:center;">لا توجد منتجات مخزنة. اضغط على "سحب المنتجات من سلة" في الأعلى.</td></tr>`;
+                container.innerHTML = `<tr><td colspan="10" style="text-align:center;">لا توجد منتجات مخزنة. اضغط على "سحب كافة المنتجات".</td></tr>`;
                 return;
             }
 
             data.products.forEach(p => {
                 const tr = document.createElement('tr');
                 tr.id = `row-${p.id}`;
+                
+                const discount = parseFloat(p.discount_percent || 0);
+                let priceHtml = `${p.current_price || 0} ر.س`;
+                if (discount > 0 && p.original_price) {
+                    priceHtml = `<span class="old-price">${p.original_price}</span> ${p.current_price} ر.س`;
+                }
+
                 tr.innerHTML = `
-                    <td><strong>${p.name}</strong><br><small style="color:#94a3b8;">${p.sku || ''}</small></td>
+                    <td><strong>${p.name}</strong><br><small style="color:#94a3b8;">ID: ${p.salla_product_id}</small></td>
                     <td>
                         <select id="karat-${p.id}">
                             <option value="24" ${p.karat == 24 ? 'selected' : ''}>24</option>
@@ -190,12 +273,14 @@
                     <td><input type="number" step="0.5" id="workmanship-${p.id}" value="${p.workmanship_per_gram || 0}"></td>
                     <td><input type="number" step="1" id="extra-${p.id}" value="${p.extra_fee || 0}"></td>
                     <td><input type="number" step="0.5" id="profit-${p.id}" value="${p.profit_margin_percent || 0}"></td>
+                    <td><input type="number" step="0.5" id="discount-${p.id}" value="${p.discount_percent || 0}"></td>
                     <td style="text-align:center;">
                         <input type="checkbox" id="taxable-${p.id}" ${p.is_taxable ? 'checked' : ''}>
                     </td>
-                    <td class="badge-price" id="price-${p.id}">${p.current_price || 0} ر.س</td>
-                    <td>
-                        <button class="btn" onclick="saveProduct(${p.id})">حفظ وتحديث سلة</button>
+                    <td class="badge-price" id="price-${p.id}">${priceHtml}</td>
+                    <td style="display:flex; gap: 4px;">
+                        <button class="btn" onclick="saveProduct(${p.id})">حفظ 💾</button>
+                        <button class="btn btn-danger" onclick="deleteProduct(${p.id})">🗑️</button>
                     </td>
                 `;
                 container.appendChild(tr);
@@ -206,28 +291,16 @@
         }
     }
 
-    // سحب المنتجات من سلة
-    async function importProducts() {
-        if(!confirm('هل تريد سحب واستيراد كافة المنتجات من متجرك بسلة؟')) return;
-        try {
-            const res = await fetch(`${API_URL}/api/products/import`, { method: 'POST' });
-            const data = await res.json();
-            alert(data.message || 'تم سحب المنتجات بنجاح');
-            loadProducts();
-        } catch (err) {
-            alert('فشل سحب المنتجات: ' + err.message);
-        }
-    }
-
-    // حفظ تفاصيل المنتج وتحديث السعر
     async function saveProduct(id) {
         const payload = {
+            merchant_id: currentMerchantId,
             metal_type: 'gold',
             karat: parseInt(document.getElementById(`karat-${id}`).value),
             weight: parseFloat(document.getElementById(`weight-${id}`).value),
             workmanship_per_gram: parseFloat(document.getElementById(`workmanship-${id}`).value),
             extra_fee: parseFloat(document.getElementById(`extra-${id}`).value),
             profit_margin_percent: parseFloat(document.getElementById(`profit-${id}`).value),
+            discount_percent: parseFloat(document.getElementById(`discount-${id}`).value),
             is_taxable: document.getElementById(`taxable-${id}`).checked
         };
 
@@ -240,13 +313,81 @@
             const data = await res.json();
 
             if (data.success) {
-                document.getElementById(`price-${id}`).innerText = `${data.product.current_price} ر.س`;
-                alert('تم تحديث بيانات المنتج وسعره في سلة بنجاح!');
+                loadProducts();
             } else {
                 throw new Error(data.error);
             }
         } catch (err) {
             alert('حدث خطأ أثناء الحفظ: ' + err.message);
+        }
+    }
+
+    async function updateAllProducts() {
+        if(!confirm('هل تريد حفظ وتحديث جميع المنتجات في سلة دفعة واحدة؟')) return;
+        try {
+            const res = await fetch(`${API_URL}/api/products/update-all`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ merchant_id: currentMerchantId })
+            });
+            const data = await res.json();
+            alert(data.message || 'تم تحديث كافة المنتجات بنجاح');
+            loadProducts();
+        } catch (err) {
+            alert('فشل تحديث كافة المنتجات: ' + err.message);
+        }
+    }
+
+    async function importProducts() {
+        if(!confirm('هل تريد سحب واستيراد كافة المنتجات من متجرك بسلة؟')) return;
+        try {
+            const res = await fetch(`${API_URL}/api/products/import`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ merchant_id: currentMerchantId })
+            });
+            const data = await res.json();
+            alert(data.message || 'تم سحب المنتجات بنجاح');
+            loadProducts();
+        } catch (err) {
+            alert('فشل سحب المنتجات: ' + err.message);
+        }
+    }
+
+    async function fetchSingleProduct() {
+        const query = document.getElementById('single-fetch-query').value.trim();
+        if(!query) return alert('يرجى كتابة عنوان المنتج أو الـ ID الخاص به في سلة');
+
+        try {
+            const res = await fetch(`${API_URL}/api/products/fetch-single`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query, merchant_id: currentMerchantId })
+            });
+            const data = await res.json();
+            if(data.success) {
+                alert(data.message);
+                loadProducts();
+            } else {
+                throw new Error(data.error);
+            }
+        } catch(err) {
+            alert('خطأ في استدعاء المنتج: ' + err.message);
+        }
+    }
+
+    async function deleteProduct(id) {
+        if(!confirm('هل أنت تأكد من حذف هذا المنتج من إدارة التسعير؟')) return;
+        try {
+            const res = await fetch(`${API_URL}/api/products/${id}?merchant_id=${currentMerchantId}`, { method: 'DELETE' });
+            const data = await res.json();
+            if(data.success) {
+                document.getElementById(`row-${id}`).remove();
+            } else {
+                throw new Error(data.error);
+            }
+        } catch(err) {
+            alert('فشل حذف المنتج: ' + err.message);
         }
     }
 </script>
