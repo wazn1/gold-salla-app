@@ -228,6 +228,14 @@ app.delete('/api/products/:id', async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
-
+// جلب أسعار الذهب والعيارات المباشرة
+app.get('/api/gold-rates', async (req, res) => {
+    try {
+        const rates = await getLivePrices();
+        res.json({ success: true, rates, timestamp: new Date() });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
