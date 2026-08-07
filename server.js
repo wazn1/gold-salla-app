@@ -39,6 +39,7 @@ const initDb = async () => {
           is_taxable BOOLEAN DEFAULT TRUE,
           current_price DECIMAL(10,2) DEFAULT 0.00,
           original_price DECIMAL(10,2) DEFAULT 0.00,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           CONSTRAINT unique_merchant_product UNIQUE (merchant_id, salla_product_id)
       );
@@ -47,6 +48,7 @@ const initDb = async () => {
       ALTER TABLE products ADD COLUMN IF NOT EXISTS discount_percent DECIMAL(5,2) DEFAULT 0.00;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS original_price DECIMAL(10,2) DEFAULT 0.00;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS merchant_id VARCHAR(255) DEFAULT 'DEFAULT_STORE';
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
     `);
     console.log("Database schema verified and updated successfully.");
   } catch (err) {
@@ -61,7 +63,7 @@ app.get('/health', (req, res) => {
     res.json({ status: 'OK', timestamp: new Date() });
 });
 
-// معلومات الاشتراك والتجارة
+// معلومات الاشتراك والمتجر
 app.get('/api/merchant/info', async (req, res) => {
     const merchant_id = req.query.merchant_id || 'DEFAULT_STORE';
     try {
@@ -81,6 +83,8 @@ app.get('/api/products', async (req, res) => {
     const merchant_id = req.query.merchant_id || 'DEFAULT_STORE';
     try {
         const { rows } = await db.query('SELECT * FROM products WHERE merchant_id = $1 ORDER BY id DESC', [merchant_id]);
+        
+        // استعلام بأمان لتجنب الأخطاء عند عدم وجود تواريخ
         const lastImportRes = await db.query('SELECT MAX(created_at) as last_import FROM products WHERE merchant_id = $1', [merchant_id]);
         const lastUpdateRes = await db.query('SELECT MAX(updated_at) as last_update FROM products WHERE merchant_id = $1', [merchant_id]);
         
@@ -179,7 +183,7 @@ app.put('/api/products/:id', async (req, res) => {
 
         await updateSallaProductPrice(product.salla_product_id, originalPrice, product.discount_percent, product.weight);
         
-        await db.query('UPDATE products SET current_price = $1, original_price = $2 WHERE id = $3', [finalPrice, originalPrice, id]);
+        await db.query('UPDATE products SET current_price = $1, original_price = $2, updated_at = NOW() WHERE id = $3', [finalPrice, originalPrice, id]);
 
         res.json({ success: true, product: { ...product, current_price: finalPrice, original_price: originalPrice } });
     } catch (err) {
