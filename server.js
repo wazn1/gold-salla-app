@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const db = require('./db');
 const { getLivePrices, calculateProductPrice } = require('./goldService');
-const { fetchSallaProducts, updateSallaProductPrice } = require('./sallaService');
+const { fetchSallaProducts, fetchSingleSallaProduct, updateSallaProductPrice } = require('./sallaService');
 const { startSyncCron } = require('./syncCron');
 require('dotenv').config();
 
@@ -10,7 +10,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 1. إنشاء الجداول في قاعدة البيانات عند التشغيل
+// إنشاء وتحديث الجداول تلقائياً
 const initDb = async () => {
   try {
     await db.query(`
@@ -19,11 +19,14 @@ const initDb = async () => {
           merchant_id VARCHAR(255) UNIQUE NOT NULL,
           access_token TEXT NOT NULL,
           refresh_token TEXT NOT NULL,
+          subscription_expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '30 days'),
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+
       CREATE TABLE IF NOT EXISTS products (
           id SERIAL PRIMARY KEY,
-          salla_product_id VARCHAR(255) UNIQUE NOT NULL,
+          merchant_id VARCHAR(255) DEFAULT 'DEFAULT_STORE',
+          salla_product_id VARCHAR(255) NOT NULL,
           name VARCHAR(255) NOT NULL,
           sku VARCHAR(100),
           metal_type VARCHAR(20) DEFAULT 'gold',
@@ -32,43 +35,73 @@ const initDb = async () => {
           workmanship_per_gram DECIMAL(10,2) DEFAULT 0.00,
           extra_fee DECIMAL(10,2) DEFAULT 0.00,
           profit_margin_percent DECIMAL(5,2) DEFAULT 0.00,
+          discount_percent DECIMAL(5,2) DEFAULT 0.00,
           is_taxable BOOLEAN DEFAULT TRUE,
           current_price DECIMAL(10,2) DEFAULT 0.00,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          original_price DECIMAL(10,2) DEFAULT 0.00,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT unique_merchant_product UNIQUE (merchant_id, salla_product_id)
       );
+
+      ALTER TABLE store_settings ADD COLUMN IF NOT EXISTS subscription_expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '30 days');
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS discount_percent DECIMAL(5,2) DEFAULT 0.00;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS original_price DECIMAL(10,2) DEFAULT 0.00;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS merchant_id VARCHAR(255) DEFAULT 'DEFAULT_STORE';
     `);
-    console.log("Database tables verified/created successfully.");
+    console.log("Database schema verified and updated successfully.");
   } catch (err) {
     console.error("Database initialization error:", err);
   }
 };
 
-// تشغيل إنشائي للجداول وتفعيل المجدول الزمني
 initDb();
 startSyncCron();
 
-// رابط فحص حالة السيرفر
 app.get('/health', (req, res) => {
     res.json({ status: 'OK', timestamp: new Date() });
 });
 
-// API 1: جلب أسعار الذهب الفورية للوحة التحكم
-app.get('/api/live-prices', async (req, res) => {
+// معلومات الاشتراك والتجارة
+app.get('/api/merchant/info', async (req, res) => {
+    const merchant_id = req.query.merchant_id || 'DEFAULT_STORE';
     try {
-        const rates = await getLivePrices();
-        res.json({ success: true, rates });
+        const { rows } = await db.query('SELECT merchant_id, subscription_expires_at FROM store_settings WHERE merchant_id = $1', [merchant_id]);
+        if(rows.length > 0) {
+            res.json({ success: true, merchant: rows[0] });
+        } else {
+            res.json({ success: true, merchant: { merchant_id, subscription_expires_at: new Date(Date.now() + 30*24*60*60*1000) } });
+        }
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-// API 2: سحب المنتجات من سلة وتخزينها في التطبيق (مع قراءة الوزن والسعر بأمان)
+// جلب جميع منتجات متجر معين
+app.get('/api/products', async (req, res) => {
+    const merchant_id = req.query.merchant_id || 'DEFAULT_STORE';
+    try {
+        const { rows } = await db.query('SELECT * FROM products WHERE merchant_id = $1 ORDER BY id DESC', [merchant_id]);
+        const lastImportRes = await db.query('SELECT MAX(created_at) as last_import FROM products WHERE merchant_id = $1', [merchant_id]);
+        const lastUpdateRes = await db.query('SELECT MAX(updated_at) as last_update FROM products WHERE merchant_id = $1', [merchant_id]);
+        
+        res.json({ 
+            success: true, 
+            products: rows,
+            last_import: lastImportRes.rows[0]?.last_import || null,
+            last_update: lastUpdateRes.rows[0]?.last_update || null
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// سحب المنتجات من سلة
 app.post('/api/products/import', async (req, res) => {
+    const merchant_id = req.body.merchant_id || 'DEFAULT_STORE';
     try {
         const sallaProducts = await fetchSallaProducts();
         
         for (const p of sallaProducts) {
-            // استخراج السعر بأمان سواء كان كائن أو رقم أو نص
             let currentPrice = 0;
             if (p.price && typeof p.price === 'object' && p.price.amount !== undefined) {
                 currentPrice = parseFloat(p.price.amount);
@@ -76,7 +109,6 @@ app.post('/api/products/import', async (req, res) => {
                 currentPrice = parseFloat(p.price);
             }
 
-            // استخراج الوزن من سلة إذا كان محدداً مسبقاً
             let productWeight = 0;
             if (p.weight && typeof p.weight === 'object' && p.weight.value !== undefined) {
                 productWeight = parseFloat(p.weight.value);
@@ -85,103 +117,105 @@ app.post('/api/products/import', async (req, res) => {
             }
 
             await db.query(`
-                INSERT INTO products (salla_product_id, name, sku, weight, current_price)
-                VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT (salla_product_id) DO UPDATE 
+                INSERT INTO products (merchant_id, salla_product_id, name, sku, weight, current_price, original_price)
+                VALUES ($1, $2, $3, $4, $5, $6, $6)
+                ON CONFLICT (merchant_id, salla_product_id) DO UPDATE 
                 SET name = EXCLUDED.name,
                     weight = CASE WHEN products.weight = 0 THEN EXCLUDED.weight ELSE products.weight END,
-                    current_price = EXCLUDED.current_price
-            `, [String(p.id), p.name || 'منتج بدون اسم', p.sku || '', productWeight, currentPrice]);
+                    current_price = EXCLUDED.current_price,
+                    updated_at = NOW()
+            `, [merchant_id, String(p.id), p.name || 'منتج بدون اسم', p.sku || '', productWeight, currentPrice]);
         }
 
         res.json({ success: true, message: `تم سحب ${sallaProducts.length} منتج بنجاح` });
     } catch (err) {
-        console.error('Import Error:', err.message);
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-// API 3: جلب جميع المنتجات المخزنة مع تفاصيل التسعير
-app.get('/api/products', async (req, res) => {
+// استدعاء منتج واحد باسمه أو برقمه
+app.post('/api/products/fetch-single', async (req, res) => {
+    const { query, merchant_id } = req.body;
     try {
-        const { rows } = await db.query('SELECT * FROM products ORDER BY id DESC');
-        res.json({ success: true, products: rows });
-    } catch (err) {
+        const product = await fetchSingleSallaProduct(query);
+        if(!product) return res.status(404).json({ success: false, error: 'لم يتم العثور على المنتج في سلة' });
+
+        let currentPrice = parseFloat(product.price?.amount || product.price || 0);
+        let weight = parseFloat(product.weight?.value || product.weight || 0);
+
+        await db.query(`
+            INSERT INTO products (merchant_id, salla_product_id, name, sku, weight, current_price, original_price)
+            VALUES ($1, $2, $3, $4, $5, $6, $6)
+            ON CONFLICT (merchant_id, salla_product_id) DO UPDATE 
+            SET name = EXCLUDED.name, current_price = EXCLUDED.current_price, updated_at = NOW()
+        `, [merchant_id || 'DEFAULT_STORE', String(product.id), product.name, product.sku || '', weight, currentPrice]);
+
+        res.json({ success: true, message: `تم استدعاء المنتج "${product.name}" بنجاح` });
+    } catch(err) {
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-// API 4: تحديث تفاصيل الذهب لمنتج معين وتعديل سعره وزنه في سلة فوراً
+// تحديث منتج واحد
 app.put('/api/products/:id', async (req, res) => {
     const { id } = req.params;
-    const { metal_type, karat, weight, workmanship_per_gram, extra_fee, profit_margin_percent, is_taxable } = req.body;
+    const { karat, weight, workmanship_per_gram, extra_fee, profit_margin_percent, discount_percent, is_taxable, merchant_id } = req.body;
 
     try {
         const { rows } = await db.query(`
             UPDATE products SET 
-                metal_type = $1, karat = $2, weight = $3, 
-                workmanship_per_gram = $4, extra_fee = $5, 
-                profit_margin_percent = $6, is_taxable = $7, updated_at = NOW()
+                karat = $1, weight = $2, 
+                workmanship_per_gram = $3, extra_fee = $4, 
+                profit_margin_percent = $5, discount_percent = $6, 
+                is_taxable = $7, updated_at = NOW()
             WHERE id = $8 RETURNING *
-        `, [metal_type, karat, weight, workmanship_per_gram, extra_fee, profit_margin_percent, is_taxable, id]);
+        `, [karat, weight, workmanship_per_gram, extra_fee, profit_margin_percent, discount_percent, is_taxable, id]);
 
-        if (rows.length === 0) {
-            return res.status(404).json({ success: false, error: "المنتج غير موجود" });
+        if (rows.length === 0) return res.status(404).json({ success: false, error: "المنتج غير موجود" });
+
+        const product = rows[0];
+        const liveRates = await getLivePrices();
+        const { originalPrice, finalPrice } = calculateProductPrice(product, liveRates);
+
+        await updateSallaProductPrice(product.salla_product_id, originalPrice, product.discount_percent, product.weight);
+        
+        await db.query('UPDATE products SET current_price = $1, original_price = $2 WHERE id = $3', [finalPrice, originalPrice, id]);
+
+        res.json({ success: true, product: { ...product, current_price: finalPrice, original_price: originalPrice } });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// تحديث جميع المنتجات دفعة واحدة
+app.post('/api/products/update-all', async (req, res) => {
+    const merchant_id = req.body.merchant_id || 'DEFAULT_STORE';
+    try {
+        const liveRates = await getLivePrices();
+        const { rows: products } = await db.query('SELECT * FROM products WHERE merchant_id = $1', [merchant_id]);
+
+        for(const p of products) {
+            if(!p.weight || parseFloat(p.weight) <= 0) continue;
+            const { originalPrice, finalPrice } = calculateProductPrice(p, liveRates);
+            await updateSallaProductPrice(p.salla_product_id, originalPrice, p.discount_percent, p.weight);
+            await db.query('UPDATE products SET current_price = $1, original_price = $2, updated_at = NOW() WHERE id = $3', [finalPrice, originalPrice, p.id]);
         }
 
-        const updatedProduct = rows[0];
-        
-        // إعادة حساب السعر وتحديث سلة بالسعر والوزن الجديدين فوراً
-        const liveRates = await getLivePrices();
-        const newPrice = calculateProductPrice(updatedProduct, liveRates);
-        
-        await updateSallaProductPrice(updatedProduct.salla_product_id, newPrice, updatedProduct.weight);
-        await db.query('UPDATE products SET current_price = $1 WHERE id = $2', [newPrice, id]);
-
-        res.json({ success: true, product: { ...updatedProduct, current_price: newPrice } });
-    } catch (err) {
+        res.json({ success: true, message: 'تم تحديث أسعار وخصومات جميع المنتجات في سلة بنجاح' });
+    } catch(err) {
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-// API 5: استقبال وتخزين رموز التخويل عند ربط المتجر بتطبيق سلة
-app.post('/api/salla/callback', async (req, res) => {
-    const { merchant_id, access_token, refresh_token } = req.body;
+// حذف منتج
+app.delete('/api/products/:id', async (req, res) => {
     try {
-        await db.query(`
-            INSERT INTO store_settings (merchant_id, access_token, refresh_token)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (merchant_id) DO UPDATE 
-            SET access_token = EXCLUDED.access_token, refresh_token = EXCLUDED.refresh_token
-        `, [merchant_id, access_token, refresh_token]);
-        
-        res.json({ success: true, message: 'تم ربط المتجر بنجاح' });
-    } catch (err) {
+        await db.query('DELETE FROM products WHERE id = $1', [req.params.id]);
+        res.json({ success: true, message: 'تم حذف المنتج بنجاح' });
+    } catch(err) {
         res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-// مسار مؤقت لإدخال التوكن مباشرة
-app.get('/api/setup-token', async (req, res) => {
-    const { merchant_id, access_token, refresh_token } = req.query;
-    if (!merchant_id || !access_token) {
-        return res.status(400).send('يرجى تزويد merchant_id و access_token في الرابط');
-    }
-    try {
-        await db.query(`
-            INSERT INTO store_settings (merchant_id, access_token, refresh_token)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (merchant_id) DO UPDATE 
-            SET access_token = EXCLUDED.access_token, refresh_token = EXCLUDED.refresh_token
-        `, [merchant_id, access_token, refresh_token || 'dummy_refresh']);
-
-        res.send('تم حفظ Access Token بنجاح في قاعدة البيانات!');
-    } catch (err) {
-        res.status(500).send('خطأ أثناء الحفظ: ' + err.message);
     }
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
