@@ -3,48 +3,51 @@ const { getLivePrices, calculateProductPrice } = require('./goldService');
 const { updateSallaProductPrice } = require('./sallaService');
 
 function startSyncCron() {
-  // تشغيل المزامنة التلقائية كل 10 ثوانٍ (10000 ميلي ثانية)
   setInterval(async () => {
     try {
-      // 1. جلب أسعار الذهب الفورية (البورصة)
+      // 1. جلب أسعار الذهب المباشرة
       const liveRates = await getLivePrices();
 
-      // 2. جلب المنتجات وإعداداتها التي قمت بحفظها من الواجهة
-      const { rows: products } = await db.query('SELECT * FROM products');
+      // 2. جلب جميع المتاجر ذات الاشتراك النشط فقط
+      const { rows: stores } = await db.query(`
+        SELECT merchant_id FROM store_settings 
+        WHERE subscription_expires_at > NOW() OR subscription_expires_at IS NULL
+      `);
 
-      for (const product of products) {
-        // إذا لم يكن للمنتج وزن مدخل يتم تخطيه
-        if (!product.weight || parseFloat(product.weight) <= 0) {
-          continue;
-        }
+      for (const store of stores) {
+        const { rows: products } = await db.query(
+          'SELECT * FROM products WHERE merchant_id = $1',
+          [store.merchant_id]
+        );
 
-        // 3. التأكد التام من استثناء عيار 24 من ضريبة الـ 15% دائماً
-        const isTaxable = Number(product.karat) === 24 ? false : Boolean(product.is_taxable);
+        for (const product of products) {
+          if (!product.weight || parseFloat(product.weight) <= 0) continue;
 
-        // 4. بناء الكائن بنفس أسماء حقول واجهة إدارة التسعير بدقة
-        const productData = {
-          karat: Number(product.karat),
-          weight: parseFloat(product.weight || 0),
-          workmanship_per_gram: parseFloat(product.workmanship_per_gram || 0),
-          extra_fee: parseFloat(product.extra_fee || 0),
-          profit_margin_percent: parseFloat(product.profit_margin_percent || 0),
-          is_taxable: isTaxable
-        };
+          const { originalPrice, finalPrice } = calculateProductPrice(product, liveRates);
 
-        // 5. حساب السعر وفق نفس المعادلة التي تظهر في الواجهة
-        const newPrice = calculateProductPrice(productData, liveRates);
+          if (parseFloat(product.current_price) !== parseFloat(finalPrice)) {
+            await updateSallaProductPrice(
+              product.salla_product_id,
+              originalPrice,
+              product.discount_percent,
+              product.weight,
+              store.merchant_id
+            );
 
-        // إذا اختلف السعر عن السعر الحالي في قاعدة البيانات، قم بالتحديث في سلة
-        if (parseFloat(product.current_price) !== parseFloat(newPrice)) {
-          await updateSallaProductPrice(product.salla_product_id, newPrice);
-          await db.query('UPDATE products SET current_price = $1, updated_at = NOW() WHERE id = $2', [newPrice, product.id]);
-          console.log(`[كل 10 ثوانٍ] تحديث ${product.name} إلى: ${newPrice} ر.س`);
+            await db.query(`
+              UPDATE products 
+              SET current_price = $1, original_price = $2, updated_at = NOW() 
+              WHERE id = $3
+            `, [finalPrice, originalPrice, product.id]);
+
+            console.log(`[مزامنة آليّة] ${product.name} (متجر: ${store.merchant_id}) -> ${finalPrice} ر.س`);
+          }
         }
       }
     } catch (err) {
-      console.error('خطأ أثناء مزامنة الـ 10 ثوانٍ:', err.message);
+      console.error('خطأ أثناء مزامنة المتاجر:', err.message);
     }
-  }, 10000); // 10000 ms = 10 ثوانٍ
+  }, 10000); // مزامنة كل 10 ثوانٍ
 }
 
 module.exports = { startSyncCron };
