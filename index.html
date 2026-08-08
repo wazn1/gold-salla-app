@@ -124,22 +124,8 @@
 </head>
 <body>
 
-<!-- شاشة تسجيل الدخول الإلزامية لحماية النظام -->
-<div id="login-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 9999;">
-    <div style="background: #ffffff; padding: 30px; border-radius: 12px; width: 90%; max-width: 380px; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.2);">
-        <h2 style="margin-bottom: 8px; color: #1a202c;">تسجيل الدخول للنظام</h2>
-        <p style="color: #718096; font-size: 13px; margin-bottom: 20px;">أدخل اسم المستخدم وكلمة المرور للوصول للإدارة</p>
-        
-        <input type="text" id="login-username" placeholder="اسم المستخدم" style="width: 100%; padding: 10px; margin-bottom: 12px; border: 1px solid #cbd5e0; border-radius: 6px; box-sizing: border-box;">
-        <input type="password" id="login-password" placeholder="كلمة المرور" style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #cbd5e0; border-radius: 6px; box-sizing: border-box;">
-        
-        <button onclick="submitLogin()" style="width: 100%; background: #c8102e; color: white; padding: 10px; border: none; border-radius: 6px; font-weight: bold; cursor: pointer;">دخول</button>
-        <p id="login-error" style="color: #e53e3e; font-size: 12px; margin-top: 10px; display: none;"></p>
-    </div>
-</div>
-
 <div class="container">
-    <!-- شريط الحساب والخروج -->
+    <!-- شريط تسجيل الدخول والاشتراك -->
     <div class="auth-bar">
         <div>
             <strong>الحساب:</strong> <span id="user-merchant">غير مسجل</span>
@@ -151,48 +137,48 @@
             <strong>ينتهي في:</strong> <span id="user-sub-expiry">-</span>
         </div>
         <div style="margin-right: auto;">
-            <button class="btn btn-danger" onclick="logout()">تسجيل الخروج 🚪</button>
+            <input type="text" id="merchant-id-input" placeholder="Merchant ID" style="width: 110px;">
+            <button class="btn" onclick="loginMerchant()">دخول المتجر</button>
         </div>
     </div>
-
     <!-- كرت أسعار الذهب المباشرة -->
-    <div class="gold-ticker-card" style="background: #ffffff; border-radius: 12px; padding: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); margin-bottom: 20px; text-align: right; border: 1px solid #e2e8f0;">
-        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #edf2f7; padding-bottom: 8px; margin-bottom: 12px;">
-            <h3 style="margin: 0; font-size: 16px; color: #1a202c; display: flex; align-items: center; gap: 6px;">
-                <span style="color: #d69e2e;">📊</span> أسعار الذهب المباشرة
-            </h3>
-            <span id="live-indicator" style="font-size: 11px; background: #e6fffa; color: #234e52; padding: 2px 8px; border-radius: 12px; border: 1px solid #b2f5ea;">
-                🟢 تحديث حي (كل 10ث)
-            </span>
-        </div>
+<div class="gold-ticker-card" style="background: #ffffff; border-radius: 12px; padding: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); margin-bottom: 20px; text-align: right; border: 1px solid #e2e8f0;">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #edf2f7; padding-bottom: 8px; margin-bottom: 12px;">
+        <h3 style="margin: 0; font-size: 16px; color: #1a202c; display: flex; align-items: center; gap: 6px;">
+            <span style="color: #d69e2e;">📊</span> أسعار الذهب المباشرة
+        </h3>
+        <span id="live-indicator" style="font-size: 11px; background: #e6fffa; color: #234e52; padding: 2px 8px; border-radius: 12px; border: 1px solid #b2f5ea;">
+            🟢 تحديث حي (كل 10ث)
+        </span>
+    </div>
 
-        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; font-size: 13px;">
-            <div style="background: #f7fafc; padding: 8px 10px; border-radius: 8px; border-right: 3px solid #d69e2e;">
-                <span style="color: #718096; display: block; font-size: 11px;">سعر الأونصة (USD):</span>
-                <strong id="rate-ounce-usd" style="color: #2d3748; font-size: 14px;">---</strong>
-            </div>
-            <div style="background: #f7fafc; padding: 8px 10px; border-radius: 8px; border-right: 3px solid #319795;">
-                <span style="color: #718096; display: block; font-size: 11px;">سعر الأونصة (SAR):</span>
-                <strong id="rate-ounce-sar" style="color: #2d3748; font-size: 14px;">---</strong>
-            </div>
-            <div style="background: #fffaf0; padding: 8px 10px; border-radius: 8px; border: 1px solid #feebc8;">
-                <span style="color: #744210; font-size: 12px;">ذهب عيار 24:</span>
-                <strong id="rate-24k" style="color: #975a16; float: left;">--- ر.س</strong>
-            </div>
-            <div style="background: #fffaf0; padding: 8px 10px; border-radius: 8px; border: 1px solid #feebc8;">
-                <span style="color: #744210; font-size: 12px;">ذهب عيار 22:</span>
-                <strong id="rate-22k" style="color: #975a16; float: left;">--- ر.س</strong>
-            </div>
-            <div style="background: #fffaf0; padding: 8px 10px; border-radius: 8px; border: 1px solid #feebc8;">
-                <span style="color: #744210; font-size: 12px;">ذهب عيار 21:</span>
-                <strong id="rate-21k" style="color: #975a16; float: left;">--- ر.س</strong>
-            </div>
-            <div style="background: #fffaf0; padding: 8px 10px; border-radius: 8px; border: 1px solid #feebc8;">
-                <span style="color: #744210; font-size: 12px;">ذهب عيار 18:</span>
-                <strong id="rate-18k" style="color: #975a16; float: left;">--- ر.س</strong>
-            </div>
+    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; font-size: 13px;">
+        <div style="background: #f7fafc; padding: 8px 10px; border-radius: 8px; border-right: 3px solid #d69e2e;">
+            <span style="color: #718096; display: block; font-size: 11px;">سعر الأونصة (USD):</span>
+            <strong id="rate-ounce-usd" style="color: #2d3748; font-size: 14px;">---</strong>
+        </div>
+        <div style="background: #f7fafc; padding: 8px 10px; border-radius: 8px; border-right: 3px solid #319795;">
+            <span style="color: #718096; display: block; font-size: 11px;">سعر الأونصة (SAR):</span>
+            <strong id="rate-ounce-sar" style="color: #2d3748; font-size: 14px;">---</strong>
+        </div>
+        <div style="background: #fffaf0; padding: 8px 10px; border-radius: 8px; border: 1px solid #feebc8;">
+            <span style="color: #744210; font-size: 12px;">ذهب عيار 24:</span>
+            <strong id="rate-24k" style="color: #975a16; float: left;">--- ر.س</strong>
+        </div>
+        <div style="background: #fffaf0; padding: 8px 10px; border-radius: 8px; border: 1px solid #feebc8;">
+            <span style="color: #744210; font-size: 12px;">ذهب عيار 22:</span>
+            <strong id="rate-22k" style="color: #975a16; float: left;">--- ر.س</strong>
+        </div>
+        <div style="background: #fffaf0; padding: 8px 10px; border-radius: 8px; border: 1px solid #feebc8;">
+            <span style="color: #744210; font-size: 12px;">ذهب عيار 21:</span>
+            <strong id="rate-21k" style="color: #975a16; float: left;">--- ر.س</strong>
+        </div>
+        <div style="background: #fffaf0; padding: 8px 10px; border-radius: 8px; border: 1px solid #feebc8;">
+            <span style="color: #744210; font-size: 12px;">ذهب عيار 18:</span>
+            <strong id="rate-18k" style="color: #975a16; float: left;">--- ر.س</strong>
         </div>
     </div>
+</div>
 
     <header>
         <div>
@@ -244,84 +230,26 @@
 
 <script>
     const API_URL = 'https://gold-salla-backend.onrender.com';
-    let currentMerchantId = 'DEFAULT_STORE';
+    let currentMerchantId = localStorage.getItem('merchant_id') || 'DEFAULT_STORE';
 
     document.addEventListener('DOMContentLoaded', () => {
-        const token = localStorage.getItem('auth_token');
-        if (token) {
-            document.getElementById('login-modal').style.display = 'none';
-            loadMerchantInfo();
-            loadProducts();
-        } else {
-            document.getElementById('login-modal').style.display = 'flex';
-        }
-        fetchLiveGoldRates();
-        setInterval(fetchLiveGoldRates, 10000);
+        document.getElementById('merchant-id-input').value = currentMerchantId;
+        loadMerchantInfo();
+        loadProducts();
     });
 
-    async function submitLogin() {
-        const username = document.getElementById('login-username').value.trim();
-        const password = document.getElementById('login-password').value.trim();
-        const errorEl = document.getElementById('login-error');
-
-        try {
-            const res = await fetch(`${API_URL}/api/login`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, password })
-            });
-            const data = await res.json();
-
-            if (data.success) {
-                localStorage.setItem('auth_token', data.token);
-                document.getElementById('login-modal').style.display = 'none';
-                loadMerchantInfo();
-                loadProducts();
-            } else {
-                errorEl.innerText = data.error;
-                errorEl.style.display = 'block';
-            }
-        } catch (err) {
-            errorEl.innerText = 'تعذر الاتصال بالسيرفر';
-            errorEl.style.display = 'block';
-        }
-    }
-
-    function logout() {
-        localStorage.removeItem('auth_token');
-        location.reload();
-    }
-
-    async function fetchLiveGoldRates() {
-        try {
-            const response = await fetch(`${API_URL}/api/gold-rates`);
-            const data = await response.json();
-
-            if (data.success && data.rates) {
-                const r = data.rates;
-                const setEl = (id, val) => {
-                    const el = document.getElementById(id);
-                    if (el) el.innerText = val;
-                };
-
-                setEl('rate-ounce-usd', `$${parseFloat(r.ounce_usd || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`);
-                setEl('rate-ounce-sar', `${parseFloat(r.ounce_sar || 0).toFixed(2)} ر.س`);
-                setEl('rate-24k', `${parseFloat(r.gram_24k || 0).toFixed(2)} ر.س`);
-                setEl('rate-22k', `${parseFloat(r.gram_22k || 0).toFixed(2)} ر.س`);
-                setEl('rate-21k', `${parseFloat(r.gram_21k || 0).toFixed(2)} ر.س`);
-                setEl('rate-18k', `${parseFloat(r.gram_18k || 0).toFixed(2)} ر.س`);
-            }
-        } catch (error) {
-            console.error('خطأ جلب الأسعار المباشرة:', error);
-        }
+    function loginMerchant() {
+        const id = document.getElementById('merchant-id-input').value.trim();
+        if(!id) return alert('يرجى إدخال Merchant ID');
+        localStorage.setItem('merchant_id', id);
+        currentMerchantId = id;
+        loadMerchantInfo();
+        loadProducts();
     }
 
     async function loadMerchantInfo() {
-        const token = localStorage.getItem('auth_token');
         try {
-            const res = await fetch(`${API_URL}/api/merchant/info?merchant_id=${currentMerchantId}`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
+            const res = await fetch(`${API_URL}/api/merchant/info?merchant_id=${currentMerchantId}`);
             const data = await res.json();
             if (data.success && data.merchant) {
                 document.getElementById('user-merchant').innerText = data.merchant.merchant_id;
@@ -330,6 +258,11 @@
                 statusElem.innerText = isExpired ? 'منتهي' : 'نشط';
                 statusElem.className = isExpired ? 'sub-expired' : 'sub-active';
                 document.getElementById('user-sub-expiry').innerText = new Date(data.merchant.subscription_expires_at).toLocaleDateString('ar-SA');
+            } else {
+                document.getElementById('user-merchant').innerText = currentMerchantId;
+                document.getElementById('user-sub-status').innerText = 'نشط (تجريبي)';
+                document.getElementById('user-sub-status').className = 'sub-active';
+                document.getElementById('user-sub-expiry').innerText = 'غير محدد';
             }
         } catch (err) {
             console.error(err);
@@ -337,15 +270,10 @@
     }
 
     async function loadProducts() {
-        const token = localStorage.getItem('auth_token');
         try {
-            const res = await fetch(`${API_URL}/api/products?merchant_id=${currentMerchantId}`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-
-            if (res.status === 401 || res.status === 403) return logout();
-
+            const res = await fetch(`${API_URL}/api/products?merchant_id=${currentMerchantId}`);
             const data = await res.json();
+            
             if (!data.success) throw new Error(data.error);
 
             const container = document.getElementById('products-list');
@@ -402,7 +330,6 @@
     }
 
     async function saveProduct(id) {
-        const token = localStorage.getItem('auth_token');
         const payload = {
             merchant_id: currentMerchantId,
             metal_type: 'gold',
@@ -418,10 +345,7 @@
         try {
             const res = await fetch(`${API_URL}/api/products/${id}`, {
                 method: 'PUT',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
             const data = await res.json();
@@ -438,14 +362,10 @@
 
     async function updateAllProducts() {
         if(!confirm('هل تريد حفظ وتحديث جميع المنتجات في سلة دفعة واحدة؟')) return;
-        const token = localStorage.getItem('auth_token');
         try {
             const res = await fetch(`${API_URL}/api/products/update-all`, {
                 method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ merchant_id: currentMerchantId })
             });
             const data = await res.json();
@@ -458,14 +378,10 @@
 
     async function importProducts() {
         if(!confirm('هل تريد سحب واستيراد كافة المنتجات من متجرك بسلة؟')) return;
-        const token = localStorage.getItem('auth_token');
         try {
             const res = await fetch(`${API_URL}/api/products/import`, {
                 method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ merchant_id: currentMerchantId })
             });
             const data = await res.json();
@@ -479,15 +395,11 @@
     async function fetchSingleProduct() {
         const query = document.getElementById('single-fetch-query').value.trim();
         if(!query) return alert('يرجى كتابة عنوان المنتج أو الـ ID الخاص به في سلة');
-        const token = localStorage.getItem('auth_token');
 
         try {
             const res = await fetch(`${API_URL}/api/products/fetch-single`, {
                 method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ query, merchant_id: currentMerchantId })
             });
             const data = await res.json();
@@ -504,12 +416,8 @@
 
     async function deleteProduct(id) {
         if(!confirm('هل أنت تأكد من حذف هذا المنتج من إدارة التسعير؟')) return;
-        const token = localStorage.getItem('auth_token');
         try {
-            const res = await fetch(`${API_URL}/api/products/${id}?merchant_id=${currentMerchantId}`, { 
-                method: 'DELETE',
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
+            const res = await fetch(`${API_URL}/api/products/${id}?merchant_id=${currentMerchantId}`, { method: 'DELETE' });
             const data = await res.json();
             if(data.success) {
                 document.getElementById(`row-${id}`).remove();
