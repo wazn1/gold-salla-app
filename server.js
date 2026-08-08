@@ -244,6 +244,36 @@ app.delete('/api/products/:id', async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
+// 🟢 مسار استقبال Webhook من سلة (تثبيت التطبيقات أو تحديث الصلاحيات)
+app.post('/webhooks/salla', async (req, res) => {
+    try {
+        const { event, merchant, data } = req.body;
 
+        if (event === 'app.store.authorize' && data) {
+            const merchantId = String(merchant || 'DEFAULT_STORE');
+            const accessToken = data.access_token;
+            const refreshToken = data.refresh_token;
+            const expiresAt = data.expires ? new Date(data.expires * 1000) : new Date(Date.now() + 30*24*60*60*1000);
+
+            // حفظ الرموز الجديدة في قاعدة البيانات تلقائياً
+            await db.query(`
+                INSERT INTO store_settings (merchant_id, access_token, refresh_token, subscription_expires_at)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (merchant_id) DO UPDATE 
+                SET access_token = EXCLUDED.access_token,
+                    refresh_token = EXCLUDED.refresh_token,
+                    subscription_expires_at = EXCLUDED.subscription_expires_at;
+            `, [merchantId, accessToken, refreshToken, expiresAt]);
+
+            console.log(`✅ تم تحديث رمزي Access & Refresh Token للتاجر: ${merchantId}`);
+        }
+
+        // إرجاع استجابة 200 لسلة لإعلامها بنجاح الاستلام
+        res.status(200).json({ success: true, message: 'Webhook received successfully' });
+    } catch (err) {
+        console.error('❌ خطأ في معالجة Webhook سلة:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
