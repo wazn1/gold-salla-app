@@ -1,319 +1,279 @@
-// 🌐 رابط السيرفر المعتمد بعد تصحيح الخطأ المطبعي
-const API_URL = 'https://gold-salla-backend.onrender.com';
-let currentMerchantId = 'DEFAULT_STORE';
+const express = require('express');
+const cors = require('cors');
+const db = require('./db');
+const { getLivePrices, calculateProductPrice } = require('./goldService');
+const { fetchSallaProducts, fetchSingleSallaProduct, updateSallaProductPrice } = require('./sallaService');
+const { startSyncCron } = require('./syncCron');
+require('dotenv').config();
 
-document.addEventListener('DOMContentLoaded', () => {
-    const token = localStorage.getItem('auth_token');
-    if (token) {
-        document.getElementById('login-modal').style.display = 'none';
-        loadMerchantInfo();
-        loadProducts();
-    } else {
-        document.getElementById('login-modal').style.display = 'flex';
-    }
+const app = express();
 
-    // بدء جلب أسعار الذهب المباشرة وتكرارها كل 10 ثوانٍ
-    fetchLiveGoldRates();
-    setInterval(fetchLiveGoldRates, 10000);
+// السماح باتصالات CORS من GitHub Pages ومن كافة المصادر
+app.use(cors());
+app.use(express.json());
+
+// إنشاء وتحديث الجداول والقيود في قاعدة البيانات
+const initDb = async () => {
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS store_settings (
+          id SERIAL PRIMARY KEY,
+          merchant_id VARCHAR(255) UNIQUE NOT NULL,
+          access_token TEXT NOT NULL,
+          refresh_token TEXT NOT NULL,
+          subscription_expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '30 days'),
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS products (
+          id SERIAL PRIMARY KEY,
+          merchant_id VARCHAR(255) DEFAULT 'DEFAULT_STORE',
+          salla_product_id VARCHAR(255) NOT NULL,
+          name VARCHAR(255) NOT NULL,
+          sku VARCHAR(100),
+          metal_type VARCHAR(20) DEFAULT 'gold',
+          karat INT NOT NULL DEFAULT 21,
+          weight DECIMAL(10,3) NOT NULL DEFAULT 0.000,
+          workmanship_per_gram DECIMAL(10,2) DEFAULT 0.00,
+          extra_fee DECIMAL(10,2) DEFAULT 0.00,
+          profit_margin_percent DECIMAL(5,2) DEFAULT 0.00,
+          discount_percent DECIMAL(5,2) DEFAULT 0.00,
+          is_taxable BOOLEAN DEFAULT TRUE,
+          current_price DECIMAL(10,2) DEFAULT 0.00,
+          original_price DECIMAL(10,2) DEFAULT 0.00,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      ALTER TABLE store_settings ADD COLUMN IF NOT EXISTS subscription_expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '30 days');
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS discount_percent DECIMAL(5,2) DEFAULT 0.00;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS original_price DECIMAL(10,2) DEFAULT 0.00;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS merchant_id VARCHAR(255) DEFAULT 'DEFAULT_STORE';
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+      -- إضافة قيد الفرادة بأمان لضمان عمل عمليات ON CONFLICT
+      DO $$ 
+      BEGIN 
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'unique_merchant_product'
+        ) THEN
+          ALTER TABLE products ADD CONSTRAINT unique_merchant_product UNIQUE (merchant_id, salla_product_id);
+        END IF;
+      END $$;
+    `);
+    console.log("Database schema verified and updated successfully.");
+  } catch (err) {
+    console.error("Database initialization error:", err);
+  }
+};
+
+initDb();
+startSyncCron();
+
+// مسار فحص حالة السيرفر
+app.get('/health', (req, res) => {
+    res.json({ status: 'OK', timestamp: new Date() });
 });
 
-// 🔑 تسجيل الدخول وحفظ التوكن
-async function submitLogin() {
-    const username = document.getElementById('login-username').value.trim();
-    const password = document.getElementById('login-password').value.trim();
-    const errorEl = document.getElementById('login-error');
-
-    if (!username || !password) {
-        errorEl.innerText = 'يرجى إدخال اسم المستخدم وكلمة المرور';
-        errorEl.style.display = 'block';
-        return;
-    }
-
-    errorEl.innerText = 'جاري الاتصال بالسيرفر...';
-    errorEl.style.display = 'block';
-    errorEl.style.color = '#3182ce';
-
+// 🟢 مسار جلب أسعار الذهب المباشرة والعيارات للواجهة
+app.get('/api/gold-rates', async (req, res) => {
     try {
-        const res = await fetch(`${API_URL}/api/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password })
-        });
+        const rates = await getLivePrices();
+        if (!rates) {
+            return res.status(503).json({ success: false, error: 'تعذر جلب أسعار الذهب حالياً' });
+        }
+        res.json({ success: true, rates, timestamp: new Date() });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
 
-        const data = await res.json();
-
-        if (res.ok && data.success) {
-            localStorage.setItem('auth_token', data.token);
-            document.getElementById('login-modal').style.display = 'none';
-            loadMerchantInfo();
-            loadProducts();
+// جلب معلومات اشتراك التاجر
+app.get('/api/merchant/info', async (req, res) => {
+    const merchant_id = req.query.merchant_id || 'DEFAULT_STORE';
+    try {
+        const { rows } = await db.query('SELECT merchant_id, subscription_expires_at FROM store_settings WHERE merchant_id = $1', [merchant_id]);
+        if (rows.length > 0) {
+            res.json({ success: true, merchant: rows[0] });
         } else {
-            errorEl.style.color = '#e53e3e';
-            errorEl.innerText = data.error || 'اسم المستخدم أو كلمة المرور غير صحيحة';
+            res.json({ success: true, merchant: { merchant_id, subscription_expires_at: new Date(Date.now() + 30*24*60*60*1000) } });
         }
     } catch (err) {
-        console.error('Login Fetch Error:', err);
-        errorEl.style.color = '#e53e3e';
-        errorEl.innerText = 'تعذر الاتصال بالسيرفر. تحقق من حالة السيرفر وحاول مجدداً.';
+        res.status(500).json({ success: false, error: err.message });
     }
-}
+});
 
-// 🚪 تسجيل الخروج
-function logout() {
-    localStorage.removeItem('auth_token');
-    location.reload();
-}
-
-// 📊 جلب أسعار الذهب المباشرة وتحديث شريط الأسعار
-async function fetchLiveGoldRates() {
+// جلب قائمة المنتجات
+app.get('/api/products', async (req, res) => {
+    const merchant_id = req.query.merchant_id || 'DEFAULT_STORE';
     try {
-        const response = await fetch(`${API_URL}/api/gold-rates`);
-        const data = await response.json();
-
-        if (data.success && data.rates) {
-            const r = data.rates;
-            const setEl = (id, val) => {
-                const el = document.getElementById(id);
-                if (el) el.innerText = val;
-            };
-
-            setEl('rate-ounce-usd', `$${parseFloat(r.ounce_usd || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`);
-            setEl('rate-ounce-sar', `${parseFloat(r.ounce_sar || 0).toFixed(2)} ر.س`);
-            setEl('rate-24k', `${parseFloat(r.gram_24k || 0).toFixed(2)} ر.س`);
-            setEl('rate-22k', `${parseFloat(r.gram_22k || 0).toFixed(2)} ر.س`);
-            setEl('rate-21k', `${parseFloat(r.gram_21k || 0).toFixed(2)} ر.س`);
-            setEl('rate-18k', `${parseFloat(r.gram_18k || 0).toFixed(2)} ر.س`);
-        }
-    } catch (error) {
-        console.error('خطأ أثناء جلب الأسعار المباشرة:', error);
-    }
-}
-
-// 👤 جلب معلومات المتجر والاشتراك
-async function loadMerchantInfo() {
-    const token = localStorage.getItem('auth_token');
-    try {
-        const res = await fetch(`${API_URL}/api/merchant/info?merchant_id=${currentMerchantId}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
+        const { rows } = await db.query('SELECT * FROM products WHERE merchant_id = $1 ORDER BY id DESC', [merchant_id]);
+        
+        const lastImportRes = await db.query('SELECT MAX(created_at) as last_import FROM products WHERE merchant_id = $1', [merchant_id]);
+        const lastUpdateRes = await db.query('SELECT MAX(updated_at) as last_update FROM products WHERE merchant_id = $1', [merchant_id]);
+        
+        res.json({ 
+            success: true, 
+            products: rows,
+            last_import: lastImportRes.rows[0]?.last_import || null,
+            last_update: lastUpdateRes.rows[0]?.last_update || null
         });
-        const data = await res.json();
-        if (data.success && data.merchant) {
-            document.getElementById('user-merchant').innerText = data.merchant.merchant_id;
-            const isExpired = new Date(data.merchant.subscription_expires_at) < new Date();
-            const statusElem = document.getElementById('user-sub-status');
-            statusElem.innerText = isExpired ? 'منتهي' : 'نشط';
-            statusElem.className = isExpired ? 'sub-expired' : 'sub-active';
-            document.getElementById('user-sub-expiry').innerText = new Date(data.merchant.subscription_expires_at).toLocaleDateString('ar-SA');
-        }
     } catch (err) {
-        console.error('خطأ جلب بيانات المتجر:', err);
+        res.status(500).json({ success: false, error: err.message });
     }
-}
+});
 
-// 📦 جلب المنتجات وعرضها في الجدول
-async function loadProducts() {
-    const token = localStorage.getItem('auth_token');
+// سحب جميع المنتجات من سلة
+app.post('/api/products/import', async (req, res) => {
+    const merchant_id = req.body.merchant_id || 'DEFAULT_STORE';
     try {
-        const res = await fetch(`${API_URL}/api/products?merchant_id=${currentMerchantId}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-
-        if (res.status === 401 || res.status === 403) return logout();
-
-        const data = await res.json();
-        if (!data.success) throw new Error(data.error);
-
-        const container = document.getElementById('products-list');
-        container.innerHTML = '';
-
-        if (data.last_import) document.getElementById('last-import-time').innerText = new Date(data.last_import).toLocaleString('ar-SA');
-        if (data.last_update) document.getElementById('last-update-time').innerText = new Date(data.last_update).toLocaleString('ar-SA');
-
-        if (!data.products || data.products.length === 0) {
-            container.innerHTML = `<tr><td colspan="10" style="text-align:center;">لا توجد منتجات مخزنة. اضغط على "سحب كافة المنتجات".</td></tr>`;
-            return;
-        }
-
-        data.products.forEach(p => {
-            const tr = document.createElement('tr');
-            tr.id = `row-${p.id}`;
-            
-            const discount = parseFloat(p.discount_percent || 0);
-            let priceHtml = `${p.current_price || 0} ر.س`;
-            if (discount > 0 && p.original_price) {
-                priceHtml = `<span class="old-price">${p.original_price}</span> ${p.current_price} ر.س`;
+        const sallaProducts = await fetchSallaProducts();
+        
+        for (const p of sallaProducts) {
+            let currentPrice = 0;
+            if (p.price && typeof p.price === 'object' && p.price.amount !== undefined) {
+                currentPrice = parseFloat(p.price.amount);
+            } else if (typeof p.price === 'number' || typeof p.price === 'string') {
+                currentPrice = parseFloat(p.price);
             }
 
-            const is24k = parseInt(p.karat) === 24;
+            let productWeight = 0;
+            if (p.weight && typeof p.weight === 'object' && p.weight.value !== undefined) {
+                productWeight = parseFloat(p.weight.value);
+            } else if (typeof p.weight === 'number' || typeof p.weight === 'string') {
+                productWeight = parseFloat(p.weight);
+            }
 
-            tr.innerHTML = `
-                <td><strong>${p.name}</strong><br><small style="color:#94a3b8;">ID: ${p.salla_product_id}</small></td>
-                <td>
-                    <select id="karat-${p.id}" onchange="handleKratChange(${p.id})">
-                        <option value="24" ${p.karat == 24 ? 'selected' : ''}>24</option>
-                        <option value="22" ${p.karat == 22 ? 'selected' : ''}>22</option>
-                        <option value="21" ${p.karat == 21 ? 'selected' : ''}>21</option>
-                        <option value="18" ${p.karat == 18 ? 'selected' : ''}>18</option>
-                    </select>
-                </td>
-                <td><input type="number" step="0.001" id="weight-${p.id}" value="${p.weight || 0}"></td>
-                <td><input type="number" step="0.5" id="workmanship-${p.id}" value="${p.workmanship_per_gram || 0}"></td>
-                <td><input type="number" step="1" id="extra-${p.id}" value="${p.extra_fee || 0}"></td>
-                <td><input type="number" step="0.5" id="profit-${p.id}" value="${p.profit_margin_percent || 0}"></td>
-                <td><input type="number" step="0.5" id="discount-${p.id}" value="${p.discount_percent || 0}"></td>
-                <td style="text-align:center;">
-                    <input type="checkbox" id="taxable-${p.id}" ${p.is_taxable && !is24k ? 'checked' : ''} ${is24k ? 'disabled' : ''}>
-                </td>
-                <td class="badge-price" id="price-${p.id}">${priceHtml}</td>
-                <td style="display:flex; gap: 4px;">
-                    <button class="btn" onclick="saveProduct(${p.id})">حفظ 💾</button>
-                    <button class="btn btn-danger" onclick="deleteProduct(${p.id})">🗑️</button>
-                </td>
-            `;
-            container.appendChild(tr);
-        });
-
-    } catch (err) {
-        alert('حدث خطأ أثناء جلب المنتجات: ' + err.message);
-    }
-}
-
-// ⚖️ إلغاء تحديد الضريبة تلقائياً لعيار 24
-function handleKratChange(id) {
-    const karatSelect = document.getElementById(`karat-${id}`);
-    const taxableCheckbox = document.getElementById(`taxable-${id}`);
-    
-    if (parseInt(karatSelect.value) === 24) {
-        taxableCheckbox.checked = false;
-        taxableCheckbox.disabled = true;
-    } else {
-        taxableCheckbox.disabled = false;
-    }
-}
-
-// 💾 حفظ تعديلات منتج فردي
-async function saveProduct(id) {
-    const token = localStorage.getItem('auth_token');
-    const karatVal = parseInt(document.getElementById(`karat-${id}`).value);
-    
-    const payload = {
-        merchant_id: currentMerchantId,
-        metal_type: 'gold',
-        karat: karatVal,
-        weight: parseFloat(document.getElementById(`weight-${id}`).value),
-        workmanship_per_gram: parseFloat(document.getElementById(`workmanship-${id}`).value),
-        extra_fee: parseFloat(document.getElementById(`extra-${id}`).value),
-        profit_margin_percent: parseFloat(document.getElementById(`profit-${id}`).value),
-        discount_percent: parseFloat(document.getElementById(`discount-${id}`).value),
-        is_taxable: karatVal === 24 ? false : document.getElementById(`taxable-${id}`).checked
-    };
-
-    try {
-        const res = await fetch(`${API_URL}/api/products/${id}`, {
-            method: 'PUT',
-            headers: { 
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-
-        if (data.success) {
-            loadProducts();
-        } else {
-            throw new Error(data.error);
+            await db.query(`
+                INSERT INTO products (merchant_id, salla_product_id, name, sku, weight, current_price, original_price)
+                VALUES ($1, $2, $3, $4, $5, $6, $6)
+                ON CONFLICT (merchant_id, salla_product_id) DO UPDATE 
+                SET name = EXCLUDED.name,
+                    weight = CASE WHEN products.weight = 0 THEN EXCLUDED.weight ELSE products.weight END,
+                    current_price = EXCLUDED.current_price,
+                    updated_at = NOW()
+            `, [merchant_id, String(p.id), p.name || 'منتج بدون اسم', p.sku || '', productWeight, currentPrice]);
         }
-    } catch (err) {
-        alert('حدث خطأ أثناء الحفظ: ' + err.message);
-    }
-}
 
-// ⚡ تحديث أسعار جميع المنتجات دفعة واحدة
-async function updateAllProducts() {
-    if(!confirm('هل تريد حفظ وتحديث جميع المنتجات في سلة دفعة واحدة؟')) return;
-    const token = localStorage.getItem('auth_token');
+        res.json({ success: true, message: `تم سحب ${sallaProducts.length} منتج بنجاح` });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// استدعاء منتج واحد برقم ה-ID أو الاسم
+app.post('/api/products/fetch-single', async (req, res) => {
+    const { query, merchant_id } = req.body;
     try {
-        const res = await fetch(`${API_URL}/api/products/update-all`, {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({ merchant_id: currentMerchantId })
-        });
-        const data = await res.json();
-        alert(data.message || 'تم تحديث كافة المنتجات بنجاح');
-        loadProducts();
-    } catch (err) {
-        alert('فشل تحديث كافة المنتجات: ' + err.message);
-    }
-}
+        const product = await fetchSingleSallaProduct(query);
+        if (!product) return res.status(404).json({ success: false, error: 'لم يتم العثور على المنتج في سلة' });
 
-// 🔄 سحب واستيراد كامل المنتجات من سلة
-async function importProducts() {
-    if(!confirm('هل تريد سحب واستيراد كافة المنتجات من متجرك بسلة؟')) return;
-    const token = localStorage.getItem('auth_token');
-    try {
-        const res = await fetch(`${API_URL}/api/products/import`, {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({ merchant_id: currentMerchantId })
-        });
-        const data = await res.json();
-        alert(data.message || 'تم سحب المنتجات بنجاح');
-        loadProducts();
-    } catch (err) {
-        alert('فشل سحب المنتجات: ' + err.message);
-    }
-}
+        let currentPrice = parseFloat(product.price?.amount || product.price || 0);
+        let weight = parseFloat(product.weight?.value || product.weight || 0);
 
-// 🔍 استدعاء منتج فردي عبر الاسم أو الـ ID
-async function fetchSingleProduct() {
-    const query = document.getElementById('single-fetch-query').value.trim();
-    if(!query) return alert('يرجى كتابة عنوان المنتج أو الـ ID الخاص به في سلة');
-    const token = localStorage.getItem('auth_token');
+        await db.query(`
+            INSERT INTO products (merchant_id, salla_product_id, name, sku, weight, current_price, original_price)
+            VALUES ($1, $2, $3, $4, $5, $6, $6)
+            ON CONFLICT (merchant_id, salla_product_id) DO UPDATE 
+            SET name = EXCLUDED.name, current_price = EXCLUDED.current_price, updated_at = NOW()
+        `, [merchant_id || 'DEFAULT_STORE', String(product.id), product.name, product.sku || '', weight, currentPrice]);
+
+        res.json({ success: true, message: `تم استدعاء المنتج "${product.name}" بنجاح` });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// تحديث إعدادات وسعر منتج معين
+app.put('/api/products/:id', async (req, res) => {
+    const { id } = req.params;
+    const { karat, weight, workmanship_per_gram, extra_fee, profit_margin_percent, discount_percent, is_taxable } = req.body;
 
     try {
-        const res = await fetch(`${API_URL}/api/products/fetch-single`, {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({ query, merchant_id: currentMerchantId })
-        });
-        const data = await res.json();
-        if(data.success) {
-            alert(data.message);
-            loadProducts();
-        } else {
-            throw new Error(data.error);
+        const { rows } = await db.query(`
+            UPDATE products SET 
+                karat = $1, weight = $2, 
+                workmanship_per_gram = $3, extra_fee = $4, 
+                profit_margin_percent = $5, discount_percent = $6, 
+                is_taxable = $7, updated_at = NOW()
+            WHERE id = $8 RETURNING *
+        `, [karat, weight, workmanship_per_gram, extra_fee, profit_margin_percent, discount_percent, is_taxable, id]);
+
+        if (rows.length === 0) return res.status(404).json({ success: false, error: "المنتج غير موجود" });
+
+        const product = rows[0];
+        const liveRates = await getLivePrices();
+        const { originalPrice, finalPrice } = calculateProductPrice(product, liveRates);
+
+        await updateSallaProductPrice(product.salla_product_id, originalPrice, product.discount_percent, product.weight);
+        
+        await db.query('UPDATE products SET current_price = $1, original_price = $2, updated_at = NOW() WHERE id = $3', [finalPrice, originalPrice, id]);
+
+        res.json({ success: true, product: { ...product, current_price: finalPrice, original_price: originalPrice } });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// تحديث جميع المنتجات يدوياً
+app.post('/api/products/update-all', async (req, res) => {
+    const merchant_id = req.body.merchant_id || 'DEFAULT_STORE';
+    try {
+        const liveRates = await getLivePrices();
+        const { rows: products } = await db.query('SELECT * FROM products WHERE merchant_id = $1', [merchant_id]);
+
+        for (const p of products) {
+            if (!p.weight || parseFloat(p.weight) <= 0) continue;
+            const { originalPrice, finalPrice } = calculateProductPrice(p, liveRates);
+            await updateSallaProductPrice(p.salla_product_id, originalPrice, p.discount_percent, p.weight);
+            await db.query('UPDATE products SET current_price = $1, original_price = $2, updated_at = NOW() WHERE id = $3', [finalPrice, originalPrice, p.id]);
         }
-    } catch(err) {
-        alert('خطأ في استدعاء المنتج: ' + err.message);
-    }
-}
 
-// 🗑️ حذف منتج من لوحة التحكم
-async function deleteProduct(id) {
-    if(!confirm('هل أنت تأكد من حذف هذا المنتج من إدارة التسعير؟')) return;
-    const token = localStorage.getItem('auth_token');
-    try {
-        const res = await fetch(`${API_URL}/api/products/${id}?merchant_id=${currentMerchantId}`, { 
-            method: 'DELETE',
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const data = await res.json();
-        if(data.success) {
-            document.getElementById(`row-${id}`).remove();
-        } else {
-            throw new Error(data.error);
-        }
-    } catch(err) {
-        alert('فشل حذف المنتج: ' + err.message);
+        res.json({ success: true, message: 'تم تحديث أسعار وخصومات جميع المنتجات في سلة بنجاح' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
     }
-}
+});
+
+// حذف منتج من النظام
+app.delete('/api/products/:id', async (req, res) => {
+    try {
+        await db.query('DELETE FROM products WHERE id = $1', [req.params.id]);
+        res.json({ success: true, message: 'تم حذف المنتج بنجاح' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+// 🟢 مسار استقبال Webhook من سلة (تثبيت التطبيقات أو تحديث الصلاحيات)
+app.post('/webhooks/salla', async (req, res) => {
+    try {
+        const { event, merchant, data } = req.body;
+
+        if (event === 'app.store.authorize' && data) {
+            const merchantId = String(merchant || 'DEFAULT_STORE');
+            const accessToken = data.access_token;
+            const refreshToken = data.refresh_token;
+            const expiresAt = data.expires ? new Date(data.expires * 1000) : new Date(Date.now() + 30*24*60*60*1000);
+
+            // حفظ الرموز الجديدة في قاعدة البيانات تلقائياً
+            await db.query(`
+                INSERT INTO store_settings (merchant_id, access_token, refresh_token, subscription_expires_at)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (merchant_id) DO UPDATE 
+                SET access_token = EXCLUDED.access_token,
+                    refresh_token = EXCLUDED.refresh_token,
+                    subscription_expires_at = EXCLUDED.subscription_expires_at;
+            `, [merchantId, accessToken, refreshToken, expiresAt]);
+
+            console.log(`✅ تم تحديث رمزي Access & Refresh Token للتاجر: ${merchantId}`);
+        }
+
+        // إرجاع استجابة 200 لسلة لإعلامها بنجاح الاستلام
+        res.status(200).json({ success: true, message: 'Webhook received successfully' });
+    } catch (err) {
+        console.error('❌ خطأ في معالجة Webhook سلة:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
