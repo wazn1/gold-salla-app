@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const jwt = require('jsonwebtoken');
 const db = require('./db');
 const { getLivePrices, calculateProductPrice } = require('./goldService');
 const { fetchSallaProducts, fetchSingleSallaProduct, updateSallaProductPrice } = require('./sallaService');
@@ -8,11 +9,33 @@ require('dotenv').config();
 
 const app = express();
 
-// السماح باتصالات CORS من GitHub Pages ومن كافة المصادر
-app.use(cors());
+// إعدادات CORS للسماح بالطلبات من GitHub Pages وجميع المصادر
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
-// إنشاء وتحديث الجداول والقيود في قاعدة البيانات
+const JWT_SECRET = process.env.JWT_SECRET || 'wazn_gold_secret_key_2026';
+const ADMIN_USER = process.env.ADMIN_USER || 'wazn_admin';
+const ADMIN_PASS = process.env.ADMIN_PASS || 'gold@2026';
+
+// Middleware للتحقق من التوكن الحقيقي للمسارات المحمية
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    
+    if (!token) return res.status(401).json({ success: false, error: 'غير مصرح: يرجى تسجيل الدخول' });
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) return res.status(403).json({ success: false, error: 'انتهت الجلسة، يرجى إعادة تسجيل الدخول' });
+        req.user = user;
+        next();
+    });
+};
+
+// إنشاء وتحديث قاعدة البيانات
 const initDb = async () => {
   try {
     await db.query(`
@@ -51,7 +74,6 @@ const initDb = async () => {
       ALTER TABLE products ADD COLUMN IF NOT EXISTS merchant_id VARCHAR(255) DEFAULT 'DEFAULT_STORE';
       ALTER TABLE products ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 
-      -- إضافة قيد الفرادة بأمان لضمان عمل عمليات ON CONFLICT
       DO $$ 
       BEGIN 
         IF NOT EXISTS (
@@ -70,26 +92,77 @@ const initDb = async () => {
 initDb();
 startSyncCron();
 
-// مسار فحص حالة السيرفر
+// مسار فحص الحالة
 app.get('/health', (req, res) => {
     res.json({ status: 'OK', timestamp: new Date() });
 });
 
-// 🟢 مسار جلب أسعار الذهب المباشرة والعيارات للواجهة
+// 🔑 API تسجيل الدخول الحقيقي
+app.post('/api/login', (req, res) => {
+    const { username, password } = req.body;
+    if (username === ADMIN_USER && password === ADMIN_PASS) {
+        const token = jwt.sign({ username, merchant_id: 'DEFAULT_STORE' }, JWT_SECRET, { expiresIn: '7d' });
+        return res.json({ success: true, token, merchant_id: 'DEFAULT_STORE' });
+    }
+    return res.status(401).json({ success: false, error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+});
+
+// 🟢 مسار جلب أسعار الذهب المباشرة (متاح بدون حماية للواجهة)
 app.get('/api/gold-rates', async (req, res) => {
     try {
-        const rates = await getLivePrices();
-        if (!rates) {
-            return res.status(503).json({ success: false, error: 'تعذر جلب أسعار الذهب حالياً' });
-        }
-        res.json({ success: true, rates, timestamp: new Date() });
+        const liveData = await getLivePrices();
+        const ounceUsd = parseFloat(liveData?.ounceUsd || liveData?.price || liveData?.ounce_usd || 0);
+        const ounceSar = ounceUsd * 3.75;
+
+        const g24 = ounceSar / 31.1035;
+        const g22 = g24 * (22 / 24);
+        const g21 = g24 * (21 / 24);
+        const g18 = g24 * (18 / 24);
+
+        res.json({
+            success: true,
+            rates: {
+                ounce_usd: ounceUsd,
+                ounce_sar: ounceSar,
+                gram_24k: g24,
+                gram_22k: g22,
+                gram_21k: g21,
+                gram_18k: g18
+            },
+            timestamp: new Date()
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-// جلب معلومات اشتراك التاجر
-app.get('/api/merchant/info', async (req, res) => {
+// 🟢 مسار استقبال Webhook من سلة
+app.post('/webhooks/salla', async (req, res) => {
+    try {
+        const { event, merchant, data } = req.body;
+        if (event === 'app.store.authorize' && data) {
+            const merchantId = String(merchant || 'DEFAULT_STORE');
+            const accessToken = data.access_token;
+            const refreshToken = data.refresh_token;
+            const expiresAt = data.expires ? new Date(data.expires * 1000) : new Date(Date.now() + 30*24*60*60*1000);
+
+            await db.query(`
+                INSERT INTO store_settings (merchant_id, access_token, refresh_token, subscription_expires_at)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (merchant_id) DO UPDATE 
+                SET access_token = EXCLUDED.access_token,
+                    refresh_token = EXCLUDED.refresh_token,
+                    subscription_expires_at = EXCLUDED.subscription_expires_at;
+            `, [merchantId, accessToken, refreshToken, expiresAt]);
+        }
+        res.status(200).json({ success: true, message: 'Webhook received successfully' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 🔒 جلب معلومات التاجر
+app.get('/api/merchant/info', authenticateToken, async (req, res) => {
     const merchant_id = req.query.merchant_id || 'DEFAULT_STORE';
     try {
         const { rows } = await db.query('SELECT merchant_id, subscription_expires_at FROM store_settings WHERE merchant_id = $1', [merchant_id]);
@@ -103,12 +176,11 @@ app.get('/api/merchant/info', async (req, res) => {
     }
 });
 
-// جلب قائمة المنتجات
-app.get('/api/products', async (req, res) => {
+// 🔒 جلب المنتجات
+app.get('/api/products', authenticateToken, async (req, res) => {
     const merchant_id = req.query.merchant_id || 'DEFAULT_STORE';
     try {
         const { rows } = await db.query('SELECT * FROM products WHERE merchant_id = $1 ORDER BY id DESC', [merchant_id]);
-        
         const lastImportRes = await db.query('SELECT MAX(created_at) as last_import FROM products WHERE merchant_id = $1', [merchant_id]);
         const lastUpdateRes = await db.query('SELECT MAX(updated_at) as last_update FROM products WHERE merchant_id = $1', [merchant_id]);
         
@@ -123,26 +195,15 @@ app.get('/api/products', async (req, res) => {
     }
 });
 
-// سحب جميع المنتجات من سلة
-app.post('/api/products/import', async (req, res) => {
+// 🔒 سحب كافة المنتجات من سلة
+app.post('/api/products/import', authenticateToken, async (req, res) => {
     const merchant_id = req.body.merchant_id || 'DEFAULT_STORE';
     try {
         const sallaProducts = await fetchSallaProducts();
         
         for (const p of sallaProducts) {
-            let currentPrice = 0;
-            if (p.price && typeof p.price === 'object' && p.price.amount !== undefined) {
-                currentPrice = parseFloat(p.price.amount);
-            } else if (typeof p.price === 'number' || typeof p.price === 'string') {
-                currentPrice = parseFloat(p.price);
-            }
-
-            let productWeight = 0;
-            if (p.weight && typeof p.weight === 'object' && p.weight.value !== undefined) {
-                productWeight = parseFloat(p.weight.value);
-            } else if (typeof p.weight === 'number' || typeof p.weight === 'string') {
-                productWeight = parseFloat(p.weight);
-            }
+            let currentPrice = parseFloat(p.price?.amount || p.price || 0);
+            let productWeight = parseFloat(p.weight?.value || p.weight || 0);
 
             await db.query(`
                 INSERT INTO products (merchant_id, salla_product_id, name, sku, weight, current_price, original_price)
@@ -161,8 +222,8 @@ app.post('/api/products/import', async (req, res) => {
     }
 });
 
-// استدعاء منتج واحد برقم ה-ID أو الاسم
-app.post('/api/products/fetch-single', async (req, res) => {
+// 🔒 استدعاء منتج فردي
+app.post('/api/products/fetch-single', authenticateToken, async (req, res) => {
     const { query, merchant_id } = req.body;
     try {
         const product = await fetchSingleSallaProduct(query);
@@ -184,10 +245,15 @@ app.post('/api/products/fetch-single', async (req, res) => {
     }
 });
 
-// تحديث إعدادات وسعر منتج معين
-app.put('/api/products/:id', async (req, res) => {
+// 🔒 تحديث منتج وحفظ السعر
+app.put('/api/products/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
-    const { karat, weight, workmanship_per_gram, extra_fee, profit_margin_percent, discount_percent, is_taxable } = req.body;
+    let { karat, weight, workmanship_per_gram, extra_fee, profit_margin_percent, discount_percent, is_taxable } = req.body;
+
+    // استثناء عيار 24 تلقائياً من الضريبة
+    if (parseInt(karat) === 24) {
+        is_taxable = false;
+    }
 
     try {
         const { rows } = await db.query(`
@@ -215,8 +281,8 @@ app.put('/api/products/:id', async (req, res) => {
     }
 });
 
-// تحديث جميع المنتجات يدوياً
-app.post('/api/products/update-all', async (req, res) => {
+// 🔒 تحديث الكل
+app.post('/api/products/update-all', authenticateToken, async (req, res) => {
     const merchant_id = req.body.merchant_id || 'DEFAULT_STORE';
     try {
         const liveRates = await getLivePrices();
@@ -235,8 +301,8 @@ app.post('/api/products/update-all', async (req, res) => {
     }
 });
 
-// حذف منتج من النظام
-app.delete('/api/products/:id', async (req, res) => {
+// 🔒 حذف منتج
+app.delete('/api/products/:id', authenticateToken, async (req, res) => {
     try {
         await db.query('DELETE FROM products WHERE id = $1', [req.params.id]);
         res.json({ success: true, message: 'تم حذف المنتج بنجاح' });
@@ -244,36 +310,6 @@ app.delete('/api/products/:id', async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
-// 🟢 مسار استقبال Webhook من سلة (تثبيت التطبيقات أو تحديث الصلاحيات)
-app.post('/webhooks/salla', async (req, res) => {
-    try {
-        const { event, merchant, data } = req.body;
 
-        if (event === 'app.store.authorize' && data) {
-            const merchantId = String(merchant || 'DEFAULT_STORE');
-            const accessToken = data.access_token;
-            const refreshToken = data.refresh_token;
-            const expiresAt = data.expires ? new Date(data.expires * 1000) : new Date(Date.now() + 30*24*60*60*1000);
-
-            // حفظ الرموز الجديدة في قاعدة البيانات تلقائياً
-            await db.query(`
-                INSERT INTO store_settings (merchant_id, access_token, refresh_token, subscription_expires_at)
-                VALUES ($1, $2, $3, $4)
-                ON CONFLICT (merchant_id) DO UPDATE 
-                SET access_token = EXCLUDED.access_token,
-                    refresh_token = EXCLUDED.refresh_token,
-                    subscription_expires_at = EXCLUDED.subscription_expires_at;
-            `, [merchantId, accessToken, refreshToken, expiresAt]);
-
-            console.log(`✅ تم تحديث رمزي Access & Refresh Token للتاجر: ${merchantId}`);
-        }
-
-        // إرجاع استجابة 200 لسلة لإعلامها بنجاح الاستلام
-        res.status(200).json({ success: true, message: 'Webhook received successfully' });
-    } catch (err) {
-        console.error('❌ خطأ في معالجة Webhook سلة:', err);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
